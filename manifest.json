@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "tornikegomareli.spaces",
+  "id": "cyperx84.spaces",
   "name": "Spaces",
-  "version": "1.2.0",
-  "author": "Tornike Gomareli",
+  "version": "2.0.0",
+  "author": "Cyperx",
   "description": "Workspace switcher that shows the apps open on each workspace",
   "kinds": [
     "bar-widget"

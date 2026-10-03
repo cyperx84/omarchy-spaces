@@ -39,7 +39,7 @@
 
 First stable release, ready for the Omarchy plugin marketplace.
 
-- The plugin ID is now `tornikegomareli.spaces`, matching the repository owner.
+- The plugin ID is now `cyperx84.spaces`, matching the repository owner.
   If you installed an earlier version, remove `insanearts.spaces`, add the plugin
   again, and update the hook paths in `~/.claude/settings.json`.
 - README: screenshots from the product film, requirements, and update and

@@ -31,16 +31,16 @@ To turn it on, add these hooks to `~/.claude/settings.json`:
 ```json
 {
   "hooks": {
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "~/.config/omarchy/plugins/tornikegomareli.spaces/hooks/claude-hook working", "async": true }] }],
-    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "~/.config/omarchy/plugins/tornikegomareli.spaces/hooks/claude-hook working", "async": true }] }],
-    "Notification": [{ "hooks": [{ "type": "command", "command": "~/.config/omarchy/plugins/tornikegomareli.spaces/hooks/claude-hook waiting", "async": true }] }],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "~/.config/omarchy/plugins/tornikegomareli.spaces/hooks/claude-hook done", "async": true }] }],
-    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "~/.config/omarchy/plugins/tornikegomareli.spaces/hooks/claude-hook end", "async": true }] }]
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "~/.config/omarchy/plugins/cyperx84.spaces/hooks/claude-hook working", "async": true }] }],
+    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "~/.config/omarchy/plugins/cyperx84.spaces/hooks/claude-hook working", "async": true }] }],
+    "Notification": [{ "hooks": [{ "type": "command", "command": "~/.config/omarchy/plugins/cyperx84.spaces/hooks/claude-hook waiting", "async": true }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "~/.config/omarchy/plugins/cyperx84.spaces/hooks/claude-hook done", "async": true }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "~/.config/omarchy/plugins/cyperx84.spaces/hooks/claude-hook end", "async": true }] }]
   }
 }
 ```
 
-Other agents can report the same way: `omarchy-shell tornikegomareli.spaces agent <session> <working|waiting|done|end> <pids>`, where `<pids>` lists the agent's process and its parents, comma-separated.
+Other agents can report the same way: `omarchy-shell cyperx84.spaces agent <session> <working|waiting|done|end> <pids>`, where `<pids>` lists the agent's process and its parents, comma-separated.
 
 ### OpenCode
 
@@ -50,11 +50,11 @@ To turn it on, link it into OpenCode's plugins folder:
 
 ```sh
 mkdir -p ~/.config/opencode/plugins
-ln -sfn ~/.config/omarchy/plugins/tornikegomareli.spaces/hooks/opencode-plugin.js \
+ln -sfn ~/.config/omarchy/plugins/cyperx84.spaces/hooks/opencode-plugin.js \
         ~/.config/opencode/plugins/spaces.js
 ```
 
-The link points into the installed plugin, so `omarchy plugin update tornikegomareli.spaces` updates the reporter too. Restart OpenCode, run a prompt, and the terminal icon spins in the bar while it works and gets a check mark when it stops.
+The link points into the installed plugin, so `omarchy plugin update cyperx84.spaces` updates the reporter too. Restart OpenCode, run a prompt, and the terminal icon spins in the bar while it works and gets a check mark when it stops.
 
 `working` and `done` are reported as OpenCode works. `waiting` needs a permission prompt, so with `--auto` it rarely appears: OpenCode answers its own permission requests in milliseconds, and the plugin waits 1.5s before showing a `!` so a prompt answered instantly never flashes. To see it, run `opencode` without `--auto` and ask it to do something that needs approval.
 
@@ -67,7 +67,7 @@ To turn it on, add it to your omp config:
 ```yaml
 # ~/.omp/agent/config.yml
 extensions:
-  - ~/.config/omarchy/plugins/tornikegomareli.spaces/hooks/omp-extension.js
+  - ~/.config/omarchy/plugins/cyperx84.spaces/hooks/omp-extension.js
 ```
 
 Restart `omp`, run a prompt, and the terminal icon spins in the bar while it works and gets a check mark when it stops.
@@ -77,7 +77,7 @@ Restart `omp`, run a prompt, and the terminal icon spins in the bar while it wor
 ## Install
 
 ```sh
-omarchy plugin add https://github.com/tornikegomareli/omarchy-spaces.git --enable
+omarchy plugin add https://github.com/cyperx84/omarchy-spaces.git --enable
 omarchy plugin disable omarchy.workspaces   # optional: replace the built-in switcher
 ```
 
@@ -92,14 +92,14 @@ Works with the bar on any edge of the screen. Tested on a single monitor.
 To update, then load the new code:
 
 ```sh
-omarchy plugin update tornikegomareli.spaces
+omarchy plugin update cyperx84.spaces
 omarchy restart shell
 ```
 
 ## Remove
 
 ```sh
-omarchy plugin remove tornikegomareli.spaces
+omarchy plugin remove cyperx84.spaces
 omarchy plugin enable omarchy.workspaces   # bring back the built-in switcher
 ```
 
@@ -130,19 +130,19 @@ Use Tab / Shift+Tab to move through controls and Enter / Space to activate them.
 To open settings with a key, add this to `~/.config/hypr/bindings.lua`:
 
 ```lua
-o.bind("SUPER + CTRL + ALT + S", "Spaces settings", "omarchy-shell tornikegomareli.spaces toggle")
+o.bind("SUPER + CTRL + ALT + S", "Spaces settings", "omarchy-shell cyperx84.spaces toggle")
 ```
 
 To preview a workspace from a key or script, without hovering:
 
 ```sh
-omarchy-shell tornikegomareli.spaces peek 3
+omarchy-shell cyperx84.spaces peek 3
 ```
 
 Settings can also be set from a script:
 
 ```sh
-omarchy bar set tornikegomareli.spaces showApps all
+omarchy bar set cyperx84.spaces showApps all
 ```
 
 <br clear="right" />
@@ -152,8 +152,8 @@ omarchy bar set tornikegomareli.spaces showApps all
 From a clone of this repository, link it into Omarchy and run the tests:
 
 ```sh
-ln -sfn "$PWD" ~/.config/omarchy/plugins/tornikegomareli.spaces
-omarchy plugin enable tornikegomareli.spaces
+ln -sfn "$PWD" ~/.config/omarchy/plugins/cyperx84.spaces
+omarchy plugin enable cyperx84.spaces
 node tests/model.test.js
 node tests/opencode-plugin.test.js
 node tests/omp-extension.test.js

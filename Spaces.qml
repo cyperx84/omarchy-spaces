@@ -17,8 +17,8 @@ import "Model.js" as Model
 // settings. Settings persist inline on this widget's shell.json entry.
 Panel {
   id: root
-  moduleName: "tornikegomareli.spaces"
-  ipcTarget: "tornikegomareli.spaces"
+  moduleName: "cyperx84.spaces"
+  ipcTarget: "cyperx84.spaces"
   manageIpc: false
 
   // ------------------------------------------------------------ settings
@@ -606,7 +606,7 @@ Panel {
   // ------------------------------------------------------------ IPC
 
   IpcHandler {
-    target: "tornikegomareli.spaces"
+    target: "cyperx84.spaces"
 
     function open(): void { root.open() }
     function close(): void { root.close() }
