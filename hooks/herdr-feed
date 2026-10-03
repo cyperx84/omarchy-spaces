@@ -9,13 +9,19 @@
 #   {"type": "herdr", "focused_workspace_id": "w35",
 #    "agents": [{"pane_id", "workspace_id", "workspace_label",
 #                "workspace_number", "tab_id", "agent", "status", "title",
-#                "focused", "session", "state_change"}]}
+#                "focused", "session", "state_change", "activity", "tokens",
+#                "cwd", "since"}]}
 #
 # `status` is Herdr's agent_status verbatim (idle | working | blocked | done |
 # unknown); the widget decides what earns a badge. `state_change` is Herdr's
 # state_change_seq for the agent (higher is more recent, 0 when unknown), so
-# the widget can list the newest change first. Only panes running an agent
-# are listed.
+# the widget can list the newest change first. `activity` is Herdr's label for
+# the current status (its state_labels entry, "" when none), `tokens` the
+# pane's free-form metadata (model, ctx, cost, branch and the like; at most
+# eight short string entries), `cwd` the pane's working directory. Herdr gives
+# no time for a status change, so `since` is the unix time at which this
+# script first saw the pane in its current status: a fresh start counts from
+# then. Only panes running an agent are listed.
 #
 # Herdr not installed or not running is not an error: the script exits 0
 # quietly and the widget tries again later. It also exits 0 when the server
@@ -95,10 +101,80 @@ def dicts(items):
     return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
 
 
-def normalize(snap):
+# Limits on what is passed on from Herdr's free-form fields. Everything in
+# them comes from other programs, so it is cut down to short plain strings.
+MAX_TOKENS = 8
+MAX_TOKEN_KEY = 24
+MAX_TOKEN_VALUE = 40
+MAX_ACTIVITY = 160
+MAX_CWD = 512
+# Token keys the widget knows how to show, kept first when there are too many.
+KNOWN_TOKENS = ("model", "ctx", "cost", "branch")
+
+
+def text(value, limit):
+    # A short single-line string, or "" for anything that is not text.
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return ""
+    value = " ".join(str(value).split())
+    return value[:limit - 1] + "\u2026" if len(value) > limit else value
+
+
+def tokens_of(raw):
+    if not isinstance(raw, dict):
+        return {}
+    keys = [k for k in raw if isinstance(k, str) and 0 < len(k) <= MAX_TOKEN_KEY]
+    keys.sort(key=lambda k: (KNOWN_TOKENS.index(k) if k in KNOWN_TOKENS else len(KNOWN_TOKENS), k))
+    out = {}
+    for key in keys:
+        value = text(raw[key], MAX_TOKEN_VALUE)
+        if value:
+            out[key] = value
+        if len(out) >= MAX_TOKENS:
+            break
+    return out
+
+
+def cwd_of(value):
+    # A path is left as it is: cut short or squeezed, it would name another one.
+    return value if isinstance(value, str) and len(value) <= MAX_CWD and "\n" not in value else ""
+
+
+def activity_of(labels, status):
+    if not isinstance(labels, dict) or not isinstance(status, str):
+        return ""
+    return text(labels.get(status), MAX_ACTIVITY)
+
+
+class Since:
+    # When each pane entered its current status, as first seen by this
+    # process. Herdr has no timestamp for it, so this is the best there is.
+    def __init__(self):
+        self.seen = {}
+
+    def stamp(self, pane_id, status, now=None):
+        now = int(time.time()) if now is None else now
+        last = self.seen.get(pane_id)
+        if last is None or last[0] != status:
+            last = (status, now)
+            self.seen[pane_id] = last
+        return last[1]
+
+    def forget_except(self, pane_ids):
+        for pane_id in list(self.seen):
+            if pane_id not in pane_ids:
+                del self.seen[pane_id]
+
+
+SINCE = Since()
+
+
+def normalize(snap, since=SINCE):
     workspaces = {w.get("workspace_id"): w for w in dicts(snap.get("workspaces"))}
-    # Only the agents list carries Herdr's change counter, not the panes.
-    changes = {a.get("pane_id"): a.get("state_change_seq") for a in dicts(snap.get("agents"))}
+    # Only the agents list carries Herdr's change counter, not the panes; it
+    # also repeats state labels and tokens, used when a pane lacks them.
+    by_pane = {str(a.get("pane_id")): a for a in dicts(snap.get("agents"))}
+    changes = {pane_id: a.get("state_change_seq") for pane_id, a in by_pane.items()}
     agents = []
     for pane in dicts(snap.get("panes")):
         status = pane.get("agent_status") or "unknown"
@@ -108,6 +184,9 @@ def normalize(snap):
         workspace = workspaces.get(pane.get("workspace_id")) or {}
         session = pane.get("agent_session")
         session = session if isinstance(session, dict) else {}
+        extra = by_pane.get(str(pane.get("pane_id"))) or {}
+        labels = pane.get("state_labels") if isinstance(pane.get("state_labels"), dict) else extra.get("state_labels")
+        tokens = pane.get("tokens") if isinstance(pane.get("tokens"), dict) else extra.get("tokens")
         agents.append({
             "pane_id": pane.get("pane_id"),
             "workspace_id": pane.get("workspace_id"),
@@ -119,8 +198,13 @@ def normalize(snap):
             "title": pane.get("terminal_title_stripped") or pane.get("terminal_title") or "",
             "focused": pane.get("focused") is True,
             "session": session.get("value") or "",
-            "state_change": changes.get(pane.get("pane_id")) or 0,
+            "state_change": changes.get(str(pane.get("pane_id"))) or 0,
+            "activity": activity_of(labels, status),
+            "tokens": tokens_of(tokens),
+            "cwd": cwd_of(pane.get("cwd") or extra.get("cwd")),
+            "since": since.stamp(str(pane.get("pane_id")), status),
         })
+    since.forget_except({str(a["pane_id"]) for a in agents})
     return {"type": "herdr", "agents": agents,
             "focused_workspace_id": snap.get("focused_workspace_id")}
 
@@ -180,14 +264,14 @@ def watch(printer):
                     printer.emit(snap)
 
 
-# The demo script: (agent, workspace label, workspace number, title) and one
-# Herdr status per two-second step. Every step has a live agent, so the chip
-# stays up, and every badge shows at some point in the loop.
+# The demo script: (agent, workspace label, workspace number, title, model,
+# branch) and one Herdr status per two-second step. Every step has a live
+# agent, so the chip stays up, and every badge shows at some point in the loop.
 DEMO_AGENTS = [
-    ("claude", "api", 1, "fix flaky checkout test"),
-    ("codex", "web", 2, "migrate auth middleware"),
-    ("opencode", "docs", 3, "write release notes"),
-    ("claude", "infra", 4, "bump terraform providers"),
+    ("claude", "api", 1, "fix flaky checkout test", "opus", "fix/checkout-flake"),
+    ("codex", "web", 2, "migrate auth middleware", "gpt-5", "auth-middleware"),
+    ("opencode", "docs", 3, "write release notes", "sonnet", "main"),
+    ("claude", "infra", 4, "bump terraform providers", "opus", "deps/terraform"),
 ]
 DEMO_STEPS = [
     "working working working working done done done idle idle working",
@@ -195,13 +279,24 @@ DEMO_STEPS = [
     "done done idle idle working working working blocked blocked working",
     "idle working working working working working done done idle idle",
 ]
+# What each agent is busy with, per status, as Herdr's state labels say it.
+DEMO_ACTIVITY = [
+    {"working": "running: npm test -- checkout", "blocked": "permission: Bash"},
+    {"working": "editing src/middleware/auth.ts", "blocked": "approve edit to src/middleware/auth.ts?"},
+    {"working": "reading CHANGELOG.md", "blocked": "which version is this release?"},
+    {"working": "running: terraform plan", "blocked": "permission: terraform apply"},
+]
+# A head start, in seconds, added to the time in each status, so screenshots
+# show minutes and hours as well as seconds.
+DEMO_AGE = [35, 240, 4320, 600]
 DEMO_STEP = 2.0
 
 
-def demo_snapshot(step, changes):
+def demo_snapshot(step, changes, entered):
     agents = []
-    for i, (agent, label, number, title) in enumerate(DEMO_AGENTS):
+    for i, (agent, label, number, title, model, branch) in enumerate(DEMO_AGENTS):
         steps = DEMO_STEPS[i].split()
+        status = steps[step % len(steps)]
         agents.append({
             "pane_id": "demo:p%d" % (i + 1),
             "workspace_id": "demo:w%d" % number,
@@ -209,31 +304,41 @@ def demo_snapshot(step, changes):
             "workspace_number": number,
             "tab_id": "demo:t%d" % (i + 1),
             "agent": agent,
-            "status": steps[step % len(steps)],
+            "status": status,
             "title": title,
             "focused": False,
             "session": "",
             "state_change": changes[i],
+            "activity": DEMO_ACTIVITY[i].get(status, ""),
+            # Context and cost grow through the loop and start over with it.
+            "tokens": {"model": model, "ctx": "%d%%" % (12 + 7 * i + 3 * (step % len(steps))),
+                       "cost": "$%.2f" % (0.4 + 1.3 * i + 0.11 * (step % len(steps))), "branch": branch},
+            "cwd": "/home/demo/src/%s" % label,
+            "since": entered[i] - DEMO_AGE[i],
         })
     return {"type": "herdr", "demo": True, "agents": agents, "focused_workspace_id": None}
 
 
 def demo():
-    # Deterministic: the same lines in the same order on every run. The
-    # change counter grows like Herdr's, so the newest change sorts first.
+    # The same statuses in the same order on every run. The change counter
+    # grows like Herdr's, so the newest change sorts first; `since` is the
+    # real time each agent entered its status, less its head start.
     last = [None] * len(DEMO_AGENTS)
     changes = [0] * len(DEMO_AGENTS)
+    entered = [0] * len(DEMO_AGENTS)
     seq = 0
     step = 0
     printed = None
     while True:
+        now = int(time.time())
         for i in range(len(DEMO_AGENTS)):
             status = DEMO_STEPS[i].split()[step % len(DEMO_STEPS[i].split())]
             if status != last[i]:
                 seq += 1
                 changes[i] = seq
+                entered[i] = now
                 last[i] = status
-        line = json.dumps(demo_snapshot(step, changes), separators=(",", ":"))
+        line = json.dumps(demo_snapshot(step, changes, entered), separators=(",", ":"))
         if line != printed:
             printed = line
             sys.stdout.write(line + "\n")

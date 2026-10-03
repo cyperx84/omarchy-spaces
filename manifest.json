@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "cyperx84.spaces",
   "name": "Spaces",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "author": "Cyperx",
   "description": "Workspace switcher that shows the apps open on each workspace",
   "kinds": [
@@ -140,10 +140,22 @@
         "default": false
       },
       {
+        "key": "showSpecial",
+        "type": "bool",
+        "label": "Show scratchpad",
+        "default": true
+      },
+      {
         "key": "scrollSwitch",
         "type": "bool",
         "label": "Scroll to switch workspaces",
         "default": true
+      },
+      {
+        "key": "reverseScroll",
+        "type": "bool",
+        "label": "Reverse scroll direction",
+        "default": false
       },
       {
         "key": "animations",
@@ -263,6 +275,29 @@
           "never"
         ],
         "default": "auto"
+      },
+      {
+        "key": "agentDetails",
+        "type": "bool",
+        "label": "Agent details",
+        "default": true
+      },
+      {
+        "key": "agentNotify",
+        "type": "enum",
+        "label": "Agent notifications",
+        "options": [
+          "off",
+          "blocked",
+          "all"
+        ],
+        "default": "blocked"
+      },
+      {
+        "key": "agentMute",
+        "type": "bool",
+        "label": "Mute agent notifications",
+        "default": false
       },
       {
         "key": "demo",

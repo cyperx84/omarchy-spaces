@@ -1,0 +1,168 @@
+#!/usr/bin/env python3
+"""Report a Claude Code session to the Spaces bar widget.
+
+Claude Code runs this from its hooks (install them with
+hooks/install-claude-hooks). It reads the hook's JSON payload on stdin, maps
+the event to a state, collects the parent PIDs up to the terminal window,
+and hands the report to the shell with
+
+    omarchy-shell -q cyperx84.spaces report <session> <state> <pids> claude
+        <title> <cwd> <activity> <time>
+
+started detached, so Claude Code never waits on the bar. It always exits 0,
+never writes to stdout (Claude Code can read hook output as instructions),
+and does nothing when omarchy-shell is missing, inside Herdr (Herdr reports
+those sessions itself, and the PID walk cannot reach the window there) or in
+a remote Claude Code session.
+
+Event to state, from https://code.claude.com/docs/en/hooks:
+    SessionStart                          idle     (registers the session)
+    UserPromptSubmit                      working
+    PostToolUse, PostToolUseFailure       working
+    PermissionRequest                     waiting  (a permission dialog)
+    Notification permission_prompt,
+      elicitation_dialog, elicitation_url_dialog,
+      agent_needs_input (or no type)      waiting
+    Notification idle_prompt              settle   (working or waiting -> idle)
+    Stop, StopFailure                     done
+    SessionEnd                            end      (forgets the session)
+Other events and notification types are ignored. Stop does not run when the
+user interrupts Claude (Esc); idle_prompt, sent about 60 seconds after Claude
+finished responding if the user has not typed since, is what settles such a
+session. Standard library only.
+"""
+
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+TARGET = "cyperx84.spaces"
+SHELLS = {"sh", "bash", "dash", "zsh", "fish", "ksh", "env", "timeout", "nice", "nohup", "setsid"}
+WAITING_NOTIFICATIONS = {"permission_prompt", "elicitation_dialog", "elicitation_url_dialog", "agent_needs_input"}
+MAX_STDIN = 32 * 1024 * 1024
+# Session ids the widget refuses; the hook falls back to pid<N> for these.
+RESERVED_SESSIONS = {"__proto__", "constructor", "prototype"}
+
+
+def text(value, limit):
+    """One plain line, capped; the widget cleans it again."""
+    if not isinstance(value, str):
+        return ""
+    value = "".join(" " if ord(c) < 32 or 0x7F <= ord(c) <= 0x9F or c in "  " else c for c in value)
+    value = " ".join(value.split())
+    return value[:limit]
+
+
+def state_for(event, payload):
+    """(state, activity) for a hook event, or (None, "") to ignore it."""
+    tool = text(payload.get("tool_name"), 60)
+    if event == "SessionStart":
+        return "idle", ""
+    if event == "UserPromptSubmit":
+        return "working", ""
+    if event == "PostToolUse":
+        return "working", ("tool: " + tool) if tool else ""
+    if event == "PostToolUseFailure":
+        return "working", ("tool failed: " + tool) if tool else ""
+    if event == "PermissionRequest":
+        return "waiting", ("permission: " + tool) if tool else "permission"
+    if event == "Notification":
+        kind = payload.get("notification_type")
+        if kind is None or kind in WAITING_NOTIFICATIONS:
+            return "waiting", text(payload.get("message"), 160)
+        if kind == "idle_prompt":
+            return "settle", ""
+        return None, ""
+    if event == "Stop":
+        return "done", ""
+    if event == "StopFailure":
+        return "done", "stopped: API error"
+    if event == "SessionEnd":
+        return "end", ""
+    return None, ""
+
+
+def parent_of(pid):
+    """(parent pid, command name) from /proc, or (0, "")."""
+    try:
+        with open("/proc/%d/stat" % pid, "rb") as handle:
+            stat = handle.read().decode("utf-8", "replace")
+    except OSError:
+        return 0, ""
+    left, right = stat.find("("), stat.rfind(")")
+    if left < 0 or right < left:
+        return 0, ""
+    fields = stat[right + 2:].split()
+    try:
+        return int(fields[1]), stat[left + 1:right]
+    except (IndexError, ValueError):
+        return 0, ""
+
+
+def pid_chain():
+    """The agent's PID and its ancestors, nearest first. Shells that only
+    started this hook come off the front, so the first PID is Claude Code
+    itself, which lives as long as the session."""
+    chain = []
+    pid = os.getppid()
+    leading = True
+    for _ in range(64):
+        if pid <= 1:
+            break
+        parent, name = parent_of(pid)
+        if not (leading and name in SHELLS):
+            leading = False
+            chain.append(pid)
+        if not parent:
+            break
+        pid = parent
+    return chain
+
+
+def main():
+    if os.environ.get("HERDR_ENV") == "1" or os.environ.get("CLAUDE_CODE_REMOTE") == "true":
+        return
+    shell = shutil.which("omarchy-shell")
+    if not shell or sys.stdin is None or sys.stdin.isatty():
+        return
+    now = int(time.time() * 1000)
+    try:
+        payload = json.loads(sys.stdin.buffer.read(MAX_STDIN).decode("utf-8", "replace"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(payload, dict):
+        return
+    state, activity = state_for(payload.get("hook_event_name"), payload)
+    if not state:
+        return
+    pids = pid_chain()
+    session = payload.get("session_id")
+    if (not isinstance(session, str) or not session or session in RESERVED_SESSIONS
+            or any(ord(c) < 32 or 0x7F <= ord(c) <= 0x9F or c in "\u2028\u2029" for c in session)
+            or len(session) > 128):
+        session = "pid%d" % (pids[0] if pids else os.getppid())
+    cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else ""
+    cwd = cwd.replace("\n", " ")[:512]
+    title = text(payload.get("session_title"), 120) or text(os.path.basename(cwd.rstrip("/")), 120)
+    command = [shell, "-q", TARGET, "report", session, state, ",".join(str(p) for p in pids),
+               "claude", title, cwd, activity, str(now)]
+    limit = shutil.which("timeout")
+    if limit:
+        command = [limit, "10"] + command
+    subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True)
+
+
+if __name__ == "__main__":
+    try:
+        # Never hold Claude Code up, whatever happens.
+        signal.signal(signal.SIGALRM, lambda *_: os._exit(0))
+        signal.alarm(5)
+        main()
+    except BaseException:
+        pass
+    os._exit(0)

@@ -10,6 +10,9 @@ Item {
   property color fg: Color.foreground
   property string fontFamily: Style.font.family
   property string section: "icons"
+  // Read-only: "installed", "partial", "not installed", or "" while unknown.
+  // Spaces.qml fills it in from `install-claude-hooks status --short`.
+  property string claudeHooks: ""
   property bool confirmingReset: false
   signal settingChanged(var delta)
   signal resetRequested()
@@ -137,8 +140,24 @@ Item {
           ToggleSetting { label: "Agent status"; description: "Badges on terminals running coding agents"; key: "agentStatus" }
           ToggleSetting { visible: root.cfg.agentStatus; label: "Herdr agents"; description: "Badge terminals running Herdr with its agent status"; key: "herdrAgents" }
 
+          // Status only: installing is a manual step (docs/agents.md).
+          Text {
+            objectName: "claudeHooksStatus"
+            visible: root.cfg.agentStatus && root.claudeHooks !== ""
+            width: parent.width
+            wrapMode: Text.Wrap
+            textFormat: Text.PlainText
+            color: root.fg
+            opacity: 0.7
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            text: root.claudeHooks === "installed"
+              ? "Claude Code hooks: installed"
+              : "Claude Code hooks: " + root.claudeHooks + ". To show Claude Code without Herdr, run ~/.config/omarchy/plugins/cyperx84.spaces/hooks/install-claude-hooks install"
+          }
+
           ChoiceSetting {
-            visible: root.cfg.agentStatus && root.cfg.herdrAgents
+            visible: root.cfg.agentStatus
             title: "AGENTS CHIP"
             key: "agentChip"
             options: [
@@ -147,6 +166,21 @@ Item {
               { value: "never", label: "Never" }
             ]
           }
+
+          ToggleSetting { visible: root.cfg.agentStatus; label: "Agent details"; description: "Activity, time in state and usage in the agents list"; key: "agentDetails" }
+
+          ChoiceSetting {
+            visible: root.cfg.agentStatus
+            title: "AGENT NOTIFICATIONS"
+            key: "agentNotify"
+            options: [
+              { value: "off", label: "Off" },
+              { value: "blocked", label: "Needs input" },
+              { value: "all", label: "Needs input + finished" }
+            ]
+          }
+
+          ToggleSetting { visible: root.cfg.agentStatus && root.cfg.agentNotify !== "off"; label: "Mute agent notifications"; description: "Also omarchy-shell cyperx84.spaces mute"; key: "agentMute" }
 
         ToggleSetting { label: "Highlight urgent windows"; description: "Pulse workspaces asking for attention"; key: "urgentHighlight" }
         ToggleSetting { label: "Tooltips"; description: "Window titles on hover"; key: "tooltips" }
@@ -218,6 +252,7 @@ Item {
           SliderSetting { title: "ALWAYS SHOW WORKSPACES"; key: "persistentWorkspaces"; minimum: 0; maximum: 10 }
           ToggleSetting { label: "Hide empty workspaces"; key: "hideEmpty" }
           ToggleSetting { label: "Only this monitor's workspaces"; key: "perMonitor" }
+          ToggleSetting { label: "Show scratchpad"; description: "A pill for special workspaces that have windows"; key: "showSpecial" }
 
       }
       Column {
@@ -269,6 +304,7 @@ Item {
           }
 
           ToggleSetting { label: "Scroll to switch workspaces"; key: "scrollSwitch" }
+          ToggleSetting { visible: root.cfg.scrollSwitch; label: "Reverse scroll direction"; key: "reverseScroll" }
           ToggleSetting { label: "Middle-click icon closes window"; key: "middleClickClose" }
           ToggleSetting { label: "Shortcut tooltips"; description: "Hover a workspace to see the keys that reach it"; key: "keyTooltips" }
 

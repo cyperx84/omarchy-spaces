@@ -30,6 +30,15 @@ jobs:
       - name: Bind keys helper compiles
         run: python3 -m py_compile hooks/bind-keys
 
+      - name: Claude Code hook scripts compile
+        run: python3 -m py_compile hooks/claude-hook hooks/install-claude-hooks
+
+      - name: Claude Code hook installer
+        run: bash tests/install-hooks.sh
+
+      - name: Claude Code hook
+        run: bash tests/claude-hook.sh
+
       - name: Manifest matches Model.js defaults
         run: |
           node - <<'JS'

@@ -11,7 +11,7 @@ Open an issue with the [bug report form](https://github.com/cyperx84/omarchy-spa
 - **Steps to reproduce**, what you expected, and what happened instead. A screenshot or short recording helps for anything visual.
 - **The shell log.** Run `qs log -p /usr/share/omarchy/shell` and paste the lines around the problem, especially any that mention `Spaces.qml`, `SpacesSettings.qml` or `Model.js`.
 
-For key hints, include the output of `hyprctl binds -j` for your workspace binds and of `python3 ~/.config/omarchy/plugins/cyperx84.spaces/hooks/bind-keys`. For agent status, include the output of `python3 ~/.config/omarchy/plugins/cyperx84.spaces/hooks/herdr-feed --once`. Remove anything private, such as window titles, first.
+For key hints, include the output of `hyprctl binds -j` for your workspace binds and of `python3 ~/.config/omarchy/plugins/cyperx84.spaces/hooks/bind-keys`. For agent status, include the output of `python3 ~/.config/omarchy/plugins/cyperx84.spaces/hooks/herdr-feed --once` (Herdr) or of `~/.config/omarchy/plugins/cyperx84.spaces/hooks/install-claude-hooks status` (Claude Code without Herdr). Remove anything private, such as window titles, first.
 
 Check [docs/troubleshooting.md](docs/troubleshooting.md) before filing; your problem may already have a fix.
 
@@ -29,11 +29,13 @@ Before you open a pull request, run:
 
 ```sh
 node tests/model.test.js
-python3 -m py_compile hooks/herdr-feed hooks/bind-keys
+python3 -m py_compile hooks/herdr-feed hooks/bind-keys hooks/claude-hook hooks/install-claude-hooks
+bash tests/install-hooks.sh
+bash tests/claude-hook.sh
 bash tests/settings.sh
 ```
 
-The first two also run in CI. `tests/settings.sh` needs an Omarchy machine; if you changed `Spaces.qml`'s settings gear, also run `bash tests/gear.sh`, which opens a window on your desktop for a few seconds.
+All but the last also run in CI. The hook tests use throwaway directories from `mktemp -d` and a stub `omarchy-shell`; they never touch `~/.claude` or the running shell. `tests/settings.sh` needs an Omarchy machine; if you changed `Spaces.qml`'s settings gear, also run `bash tests/gear.sh`, which opens a window on your desktop for a few seconds.
 
 New logic in `Model.js` needs a test in `tests/model.test.js`. A new setting goes in all four places described in [Adding a setting](docs/development.md#adding-a-setting).
 
@@ -43,7 +45,7 @@ New logic in `Model.js` needs a test in `tests/model.test.js`. A new setting goe
 - Write commit subjects in the imperative, describing the change for a reader of `git log` ("Show the agents chip on vertical bars"), and explain the why in the body when it is not obvious.
 - Update the documentation in `docs/` and the README when you change behaviour or add a setting, and add a line for users under an "Unreleased" heading at the top of `CHANGELOG.md`.
 - For any visible change, attach a before and after screenshot to the pull request.
-- Test on your own machine and say what you tested: bar position, monitors, with or without Herdr.
+- Test on your own machine and say what you tested: bar position, monitors, with or without Herdr, with or without the Claude Code hooks.
 
 ## Scope
 
@@ -51,15 +53,16 @@ Spaces is a workspace switcher for the Omarchy bar. Contributions that fit:
 
 - Fixes for bugs on any bar position, monitor layout or scale
 - Better icon matching, previews and key hint detection
-- Agent status improvements, including other agent sources that fit the `agent` IPC call
+- Agent status improvements, including other agent sources that fit the `report` or `agent` IPC call
 - Settings that change how the widget looks or behaves, if they are useful to more than one person
 - Documentation, tests and accessibility
 
 What the project will not take:
 
 - Features unrelated to workspaces or agents, which belong in a separate widget
-- Code that needs root, network access or new runtime dependencies beyond Omarchy, Hyprland, Quickshell, Python 3 (for agents and for recovering bind keys) and, for agents, Herdr
-- Changes that make the widget fail or log errors when Herdr or Python is missing
+- Code that needs root, network access or new runtime dependencies beyond Omarchy, Hyprland, Quickshell, Python 3 (for agents and for recovering bind keys) and, for agents, Herdr or Claude Code
+- Changes that make the widget fail or log errors when Herdr, Claude Code or Python is missing
+- Code that changes user configuration, such as Claude Code's settings, without the user running a command for it
 - Support for compositors other than Hyprland
 
 ## License

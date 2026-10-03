@@ -14,7 +14,8 @@ import "Model.js" as Model
 // hovered or every occupied pill) slides open to reveal the app icons of its
 // windows. Left-click a pill to focus the workspace, left-click an icon to
 // focus that window, scroll to step through workspaces, right-click for
-// settings. Settings persist inline on this widget's shell.json entry.
+// settings. Special workspaces (the scratchpad) get pills of their own after
+// the numbered ones; clicking one toggles it. Settings persist inline on this widget's shell.json entry.
 Panel {
   id: root
   moduleName: "cyperx84.spaces"
@@ -86,10 +87,14 @@ Panel {
   // Workspace focused before the current one, for "click active = go back".
   property int previousWorkspaceId: -1
   property int lastWorkspaceId: -1
+  // The last numbered workspace, where scrolling starts from while the
+  // current one is not numbered.
+  property int lastNumberedWorkspaceId: -1
   onCurrentWorkspaceIdChanged: {
     if (root.lastWorkspaceId > 0 && root.lastWorkspaceId !== root.currentWorkspaceId)
       root.previousWorkspaceId = root.lastWorkspaceId
     root.lastWorkspaceId = root.currentWorkspaceId
+    if (root.currentWorkspaceId > 0) root.lastNumberedWorkspaceId = root.currentWorkspaceId
     if (root.currentWorkspaceId === root.previewWorkspaceId) root.hidePreview()
   }
 
@@ -112,13 +117,20 @@ Panel {
 
   // ------------------------------------------------------------ agents
 
-  // Any coding agent can report in through the IPC method
-  // agent(session, state, pids); Herdr's agents come from hooks/herdr-feed
-  // instead (see below). Reports land here as:
-  //   { [session]: { state: "working" | "waiting" | "done" | "idle", pids: [...] } }
-  // Reporters are trusted for their own lifecycle, but not forever: a crashed
-  // reporter never sends "end", so live claims are rechecked against /proc.
+  // Any coding agent can report in through the IPC methods
+  // agent(session, state, pids) and report(session, state, pids, agent,
+  // title, cwd, activity, time); hooks/claude-hook uses report. Herdr's agents
+  // come from hooks/herdr-feed instead (see below). Reports land here as
+  // Model.applyReport keeps them:
+  //   { [session]: { state: "working" | "waiting" | "done" | "idle", pids: [...],
+  //                  at, since, rich, agent, title, cwd, activity } }
+  // and become rows in the chip, popup, previews and notifications through
+  // Model.reporterAgents. Reporters are trusted for their own lifecycle, but
+  // not forever: a crashed reporter never sends "end", so sessions are
+  // rechecked against /proc (Model.agentProbed says which).
   property var agents: ({})
+  // { session: unix ms } of recently ended sessions; see Model.applyReport.
+  property var agentsEnded: ({})
   property var liveAgentPids: ({})
   property bool agentProbeSeen: false
   property bool agentProbeFailed: false
@@ -146,6 +158,16 @@ Panel {
     return Model.mergeAgentStates(Model.agentStates(root.agents, root.windowPids), root.herdrByPid)
   }
 
+  // { pid: true } for these window addresses.
+  function pidSet(addresses) {
+    var out = ({})
+    for (var i = 0; i < (addresses || []).length; i++) {
+      var pid = root.pidByAddress[addresses[i]]
+      if (pid) out[pid] = true
+    }
+    return out
+  }
+
   function agentStateFor(addresses) {
     var best = ""
     var rank = { waiting: 3, working: 2, done: 1 }
@@ -159,33 +181,64 @@ Panel {
     return best
   }
 
-  // PID of the window that owns an agent: its nearest ancestor window.
-  function agentWindowPid(agent) {
-    var windowPids = ({})
-    for (var address in root.pidByAddress) windowPids[root.pidByAddress[address]] = true
-    for (var i = 0; i < agent.pids.length; i++) if (windowPids[agent.pids[i]]) return agent.pids[i]
-    return 0
-  }
-
   function activeWindowPid() {
     var active = Hyprland.activeToplevel
     return active ? (root.pidByAddress[String(active.address)] || 0) : 0
   }
 
-  function applyAgent(session, state, pidsCsv) {
-    var next = ({})
-    for (var k in root.agents) if (k !== session) next[k] = root.agents[k]
-    if (state === "end") {
-      root.agents = next
-      return
+  // Every window on every monitor, [{ address, pid, workspace }]: a reporter
+  // agent's window may sit on another monitor than this bar's.
+  readonly property var allWindows: {
+    root.revision
+    var values = Hyprland.toplevels.values
+    var out = []
+    for (var i = 0; i < values.length; i++) {
+      var tl = values[i]
+      var ipc = tl.lastIpcObject || {}
+      var ws = tl.workspace ? tl.workspace.id : (ipc.workspace ? ipc.workspace.id : 0)
+      out.push({ address: String(tl.address), pid: ipc.pid || 0, workspace: ws || 0 })
     }
-    var reported = Model.normalizeAgentState(state)
-    if (!reported) return
-    var agent = { state: reported, pids: Model.parsePids(pidsCsv) }
-    // Finishing in the window you are looking at needs no check mark.
-    if (reported === "done" && root.agentWindowPid(agent) === root.activeWindowPid()) agent.state = "idle"
-    next[session] = agent
-    root.agents = next
+    return out
+  }
+
+  readonly property int activePid: {
+    var active = Hyprland.activeToplevel
+    if (!active) return 0
+    root.revision
+    var ipc = active.lastIpcObject || {}
+    return ipc.pid || root.pidByAddress[String(active.address)] || 0
+  }
+
+  readonly property var allWindowPids: {
+    var pids = ({})
+    for (var i = 0; i < root.allWindows.length; i++) if (root.allWindows[i].pid) pids[root.allWindows[i].pid] = true
+    return pids
+  }
+
+  readonly property string homeDir: Quickshell.env("HOME") || ""
+
+  // Reporter agents as rows, in the feed's agent shape. Demo mode shows only
+  // its made-up agents, never real ones.
+  readonly property var reporterList: !root.cfg.agentStatus || root.herdrDemo ? []
+    : Model.reporterAgents(root.agents, { windows: root.allWindows, activePid: root.activePid, home: root.homeDir })
+
+  // One report from either IPC method; see Model.applyReport.
+  function applyAgentReport(report) {
+    var result = Model.applyReport(root.agents, report, { now: Date.now(), activeWindowPid: root.activePid,
+      windowPids: root.allWindowPids, ended: root.agentsEnded })
+    root.agentsEnded = result.ended
+    if (result.agents === root.agents) return
+    root.agents = result.agents
+    root.noteAgentAlerts(false)
+  }
+
+  function applyAgent(session, state, pidsCsv) {
+    root.applyAgentReport({ session: session, state: state, pids: pidsCsv })
+  }
+
+  function applyReport(session, state, pidsCsv, agent, title, cwd, activity, time) {
+    root.applyAgentReport({ session: session, state: state, pids: pidsCsv, agent: agent, title: title,
+      cwd: cwd, activity: activity, at: Number(time) || 0, rich: true })
   }
 
   // A crashed reporter leaves working/waiting behind with no "end". Recheck
@@ -235,24 +288,19 @@ Panel {
     // not a failed check.
     if (!seen || failed) return
     // pruneDeadAgents takes an array; liveAgentPids is a dedup map.
-    root.agents = Model.pruneDeadAgents(root.agents, Object.keys(alive))
+    var pruned = Model.pruneDeadAgents(root.agents, Object.keys(alive))
+    if (pruned === root.agents) return
+    root.agents = pruned
+    // Gone rows close their notifications.
+    root.noteAgentAlerts(false)
   }
 
   // Seeing a finished agent's window clears its check mark.
   function acknowledgeAgents() {
-    var pid = root.activeWindowPid()
-    if (!pid) return
-    var changed = false
-    var next = ({})
-    for (var k in root.agents) {
-      var agent = root.agents[k]
-      if (agent.state === "done" && root.agentWindowPid(agent) === pid) {
-        agent = { state: "idle", pids: agent.pids }
-        changed = true
-      }
-      next[k] = agent
-    }
-    if (changed) root.agents = next
+    var next = Model.acknowledgeReports(root.agents, root.activePid, root.allWindowPids)
+    if (next === root.agents) return
+    root.agents = next
+    root.noteAgentAlerts(false)
   }
 
   Connections {
@@ -276,7 +324,15 @@ Panel {
     interval: 60000
     repeat: true
     running: true
-    onTriggered: root.startAgentProbe()
+    onTriggered: {
+      // Sessions the probe cannot check expire instead (Model.expireReports).
+      var kept = Model.expireReports(root.agents, Date.now())
+      if (kept !== root.agents) {
+        root.agents = kept
+        root.noteAgentAlerts(false)
+      }
+      root.startAgentProbe()
+    }
   }
 
   // ------------------------------------------------------------ herdr
@@ -332,6 +388,7 @@ Panel {
   // start the other once the first has exited.
   onHerdrDemoChanged: {
     herdrRetry.stop()
+    root.herdrBaseline = true
     root.herdrFeedAgents = []
     root.herdrAcked = ({})
     root.herdrFeedKey = ""
@@ -361,6 +418,7 @@ Panel {
     } else {
       herdrRetry.stop()
       herdrFeed.running = false
+      root.herdrBaseline = true
       root.herdrFeedAgents = []
       root.herdrClientText = ""
       root.herdrAcked = ({})
@@ -382,6 +440,7 @@ Panel {
     // Finishing in the window you are looking at needs no check mark.
     root.herdrAcked = Model.herdrAcks(agents, root.herdrAcked, root.viewingHerdr())
     root.herdrFeedAgents = agents
+    root.noteAgentAlerts(true)
   }
 
   function viewingHerdr() {
@@ -420,12 +479,16 @@ Panel {
     onStarted: {
       root.herdrFeedStarted = Date.now()
       root.herdrFeedSpoke = false
+      // Its first snapshot only sets the baseline for notifications.
+      root.herdrBaseline = true
     }
     onExited: {
       // Herdr is gone (or never was): no stale badges, and try again later,
       // less often each time it is still not there.
       root.herdrFeedAgents = []
       root.herdrFeedKey = ""
+      // Its agents are gone: their notifications count as answered.
+      root.closeResolvedNotifications(root.agentList)
       if (root.herdrFeedRestart) {
         root.herdrFeedRestart = false
         root.syncHerdr()
@@ -495,7 +558,10 @@ Panel {
     return ipc && ipc["class"] ? ipc["class"] : ""
   }
 
-  // { [workspaceId]: { id, active, windows: [{ address, appId, title, focused, at }] } }
+  // { [workspaceId]: { id, name, special, windows: [{ address, appId, title, focused, at }], area } }
+  // Numbered workspaces by their positive id and, with "Show scratchpad" on,
+  // special workspaces by their negative one. Named workspaces (also
+  // negative) are left out, as before.
   readonly property var workspaceMap: {
     root.revision
     var values = Hyprland.workspaces.values
@@ -505,7 +571,8 @@ Panel {
 
     for (var i = 0; i < values.length; i++) {
       var ws = values[i]
-      if (ws.id <= 0) continue
+      var special = ws.id < 0 && Model.isSpecialName(ws.name)
+      if (ws.id <= 0 && !(special && cfg.showSpecial)) continue
       if (perMonitor && ws.monitor !== root.monitor) continue
 
       var windows = []
@@ -531,9 +598,69 @@ Panel {
         transform: mon.lastIpcObject ? mon.lastIpcObject.transform : 0,
         reserved: mon.lastIpcObject ? mon.lastIpcObject.reserved : null
       }) : null
-      map[ws.id] = { id: ws.id, windows: Model.sortWindows(windows), area: area }
+      map[ws.id] = { id: ws.id, name: String(ws.name || ""), special: special, monitor: mon ? String(mon.name) : "",
+        windows: Model.sortWindows(windows), area: area }
     }
     return map
+  }
+
+  // ------------------------------------------------------------ special workspaces
+
+  // Quickshell lists special workspaces with the others but does not say
+  // which one a monitor shows, and its monitor refresh leaves lastIpcObject
+  // empty on Hyprland 0.56. So `hyprctl monitors -j` is read once at startup
+  // (its specialWorkspace field), and Hyprland's activespecial events keep it
+  // current from then on.
+  property var specialEvents: ({})
+  property var specialMonitors: []
+  property var monitorsLines: []
+  readonly property var specialShown: Model.specialShownMap(root.specialMonitors, root.specialEvents)
+  readonly property string monitorName: root.monitor ? String(root.monitor.name) : ""
+
+  function noteActiveSpecial(eventName, data) {
+    var change = Model.parseActiveSpecial(eventName, data)
+    if (!change) return
+    var next = ({})
+    for (var k in root.specialEvents) next[k] = root.specialEvents[k]
+    next[change.monitor] = change.name
+    root.specialEvents = next
+  }
+
+  // [{ id, name, short, windows, shown }]: the special pills, after the
+  // numbered ones. See Model.specialWorkspaces.
+  readonly property var specialPills: {
+    var list = []
+    for (var id in root.workspaceMap) {
+      var w = root.workspaceMap[id]
+      if (w.special) list.push({ id: w.id, name: w.name, windows: w.windows.length, monitor: w.monitor })
+    }
+    return Model.specialWorkspaces(list, { show: cfg.showSpecial, shown: Model.specialShownOn(root.specialShown, root.monitorName),
+      perMonitor: cfg.perMonitor, monitor: root.monitorName }).filter(function(p) { return p.id < 0 })
+  }
+
+  readonly property var specialById: {
+    var map = ({})
+    for (var i = 0; i < root.specialPills.length; i++) map[root.specialPills[i].id] = root.specialPills[i]
+    return map
+  }
+
+  // Every pill, in order: numbered workspaces, then special ones.
+  readonly property var pillIds: root.workspaceIds.concat(root.specialPills.map(function(p) { return p.id }))
+
+  Process {
+    id: monitorsScan
+    command: ["hyprctl", "monitors", "-j"]
+    stdout: SplitParser { onRead: function(line) { root.monitorsLines.push(line) } }
+    onStarted: root.monitorsLines = []
+    onExited: function(exitCode) {
+      if (exitCode === 0) root.specialMonitors = Model.monitorSpecials(root.monitorsLines.join("\n"))
+      root.monitorsLines = []
+    }
+  }
+
+  function toggleSpecial(name) {
+    run("hyprctl dispatch " + Util.shellQuote(Model.specialToggleDispatch(name))
+      + " >/dev/null 2>&1 || hyprctl dispatch togglespecialworkspace " + Util.shellQuote(Model.specialName(name)))
   }
 
   readonly property var workspaceIds: {
@@ -577,9 +704,19 @@ Panel {
     }
   }
 
-  function scrollBy(delta) {
-    if (!cfg.scrollSwitch || delta === 0) return
-    var next = Model.stepWorkspace(root.workspaceIds, root.currentWorkspaceId, delta < 0 ? 1 : -1)
+  // Wheel and touchpad input, one step per notch or swipe (the swipe's
+  // scroll phase marks where it ends); see Model.scrollStep. Special workspaces are never stepped through.
+  property var scrollState: null
+
+  function scrollBy(wheel) {
+    if (!cfg.scrollSwitch || !wheel) return
+    var result = Model.scrollStep(root.scrollState, {
+      angleX: wheel.angleDelta.x, angleY: wheel.angleDelta.y,
+      pixelX: wheel.pixelDelta.x, pixelY: wheel.pixelDelta.y, time: Date.now(), phase: wheel.phase
+    }, { vertical: root.vertical, reverse: cfg.reverseScroll })
+    root.scrollState = result.state
+    if (!result.step) return
+    var next = Model.scrollTarget(root.workspaceIds, root.currentWorkspaceId, root.lastNumberedWorkspaceId, result.step)
     if (next !== root.currentWorkspaceId) focusWorkspace(next)
   }
 
@@ -617,6 +754,10 @@ Panel {
       case "configreloaded":
         bindsDebounce.restart()
         break
+      case "activespecial":
+      case "activespecialv2":
+        root.noteActiveSpecial(event.name, event.data)
+        break
       case "openwindow":
       case "movewindow":
       case "movewindowv2":
@@ -650,6 +791,8 @@ Panel {
   // follow whatever the user has bound, not Omarchy's defaults:
   //   { [workspaceId]: { switch: { mods, key } | null, move: { mods, key } | null } }
   property var keyBinds: ({})
+  // { [name without "special:"]: { toggle, move } }, the same way.
+  property var specialKeys: ({})
   property var bindsLines: []
   // Parsed `hyprctl binds -j`, and hooks/bind-keys' output: the keymap for
   // code:N binds and the source keys of Lua binds `hyprctl` lists without one.
@@ -660,6 +803,7 @@ Panel {
 
   function updateKeyBinds() {
     root.keyBinds = Model.workspaceKeyBinds(root.bindsList, root.bindKeysData)
+    root.specialKeys = Model.specialKeyBinds(root.bindsList, root.bindKeysData)
   }
 
   function applyBinds(text) {
@@ -821,22 +965,26 @@ Panel {
     iconScan.running = true
     root.scanBinds()
     Hyprland.refreshToplevels()
+    monitorsScan.running = true
     root.syncHerdr()
   }
 
   // ------------------------------------------------------------ agents chip
 
-  // A pill after the workspaces that sums up every Herdr agent; clicking it
-  // lists them. One sorted list feeds the chip, its popup and the preview.
-  readonly property var sortedAgents: Model.sortAgents(root.herdrAgents)
-  readonly property var agentSummary: Model.agentChipSummary(root.herdrAgents, root.cfg.agentChip)
+  // A pill after the workspaces that sums up every agent, from Herdr and
+  // from reporters; clicking it lists them. One list, Herdr's and reporter
+  // agents merged newest first and deduplicated (Model.combineAgents), feeds
+  // the chip, its popup, the previews, tooltips and notifications.
+  readonly property var agentList: Model.combineAgents(root.herdrAgents, root.reporterList)
+  readonly property var sortedAgents: root.agentList
+  readonly property var agentSummary: Model.agentChipSummary(root.agentList, root.cfg.agentChip)
   readonly property var agentSegments: Model.agentChipSegments(root.agentSummary)
   property bool agentsWanted: false
   // Not tied to the chip being shown: when the last agent goes while the
   // list is open, it stays to say so instead of vanishing under the pointer.
-  readonly property bool agentsOpen: agentsWanted && root.herdrWanted && root.cfg.agentChip !== "never" && !root.opened
+  readonly property bool agentsOpen: agentsWanted && root.cfg.agentStatus && root.cfg.agentChip !== "never" && !root.opened
 
-  // Once closed for any reason (settings opening, Herdr switched off), it
+  // Once closed for any reason (settings opening, agents switched off), it
   // stays closed. Deferred: agentsOpen is still settling at this point.
   onAgentsOpenChanged: {
     if (root.agentsOpen) root.hidePreview()
@@ -861,13 +1009,190 @@ Panel {
   }
 
   function agentsTooltip() {
-    return ["Herdr agents"].concat(Model.herdrTooltipLines(root.sortedAgents, 48)).join("\n")
+    var head = root.agentsMuted ? "Agents \u00b7 notifications muted" : "Agents"
+    return [head].concat(Model.herdrTooltipLines(root.sortedAgents, 48, root.tipNow())).join("\n")
   }
 
-  // Jumps to an agent: Herdr focuses its pane, Hyprland the window hosting
-  // Herdr. `preferred` windows (the previewed workspace's) are tried first.
+  // Unix seconds for the time-in-state shown in tooltips, or 0 to leave it
+  // out ("Agent details" off).
+  function tipNow() {
+    return root.cfg.agentDetails ? Date.now() / 1000 : 0
+  }
+
+  readonly property bool agentsMuted: root.cfg.agentMute && root.cfg.agentNotify !== "off"
+
+  // Unix seconds that agent rows count time in state from. One timer serves
+  // every row, and runs only while a list or tooltip showing the time is up.
+  property real agentClock: Date.now() / 1000
+  // The app icon whose tooltip lists agents, while it is shown.
+  property Item agentTipItem: null
+  readonly property bool agentClockWanted: root.cfg.agentDetails && root.cfg.agentStatus
+    && (root.agentsOpen || (root.previewOpen && preview.showAgents) || agentChip.tooltipHovered || root.agentTipItem !== null)
+
+  // Fresh when a list or tooltip opens; the timer then moves it on.
+  onAgentClockWantedChanged: if (root.agentClockWanted) root.agentClock = Date.now() / 1000
+
+  Timer {
+    interval: 30000
+    repeat: true
+    running: root.agentClockWanted
+    onTriggered: {
+      root.agentClock = Date.now() / 1000
+      // A tooltip is text fixed when shown: show it again with the new times.
+      if (agentChip.tooltipHovered) root.showTip(agentChip, root.agentsTooltip())
+      if (root.agentTipItem) root.agentTipItem.showTooltip()
+    }
+  }
+
+  // ------------------------------------------------------------ agent notifications
+
+  // A desktop notification when an agent, from Herdr or a reporter, needs
+  // input ("blocked") or, with "all", finishes. The rules are in
+  // Model.agentAlerts; this part keeps the state they need and sends with
+  // notify-send. Each agent's status at the last check, by pane id.
+  property var agentSeen: ({})
+  // Set while the Herdr feed has not spoken since it (re)started: its first
+  // line only sets the baseline for Herdr's agents, never reporter agents'.
+  property bool herdrBaseline: true
+  // Alerts waiting out the rate limit, sent together as one notification.
+  property var agentPending: []
+  property real agentLastNotified: 0
+  readonly property int notifyGap: 3000
+
+  // With one bar per monitor, every bar runs its own feed. Only the first
+  // one notifies, so each alert is sent once.
+  function isNotifier() {
+    var items = root.bar && typeof root.bar.moduleWidgets === "function" ? root.bar.moduleWidgets(root.moduleName) : []
+    return items.length === 0 || items[0] === root
+  }
+
+  function notifyOptions() {
+    return { mode: root.cfg.agentNotify, muted: root.cfg.agentMute, demo: root.herdrDemo, viewing: root.viewingHerdr() }
+  }
+
+  // Called with the full list of both sources whenever either changes:
+  // `fromHerdr` for a feed line, false for a reporter change.
+  function noteAgentAlerts(fromHerdr) {
+    var agents = root.agentList
+    var options = root.notifyOptions()
+    if (root.herdrBaseline) options.baseline = "herdr"
+    if (fromHerdr) root.herdrBaseline = false
+    var result = Model.agentAlerts(root.agentSeen, agents, options)
+    root.agentSeen = result.seen
+    root.closeResolvedNotifications(agents)
+    if (!result.alerts.length || !root.isNotifier()) return
+    root.agentPending = root.agentPending.concat(result.alerts)
+    if (!notifyTimer.running) {
+      notifyTimer.interval = Math.max(50, Model.notifyDelay(root.agentLastNotified, Date.now(), root.notifyGap))
+      notifyTimer.start()
+    }
+  }
+
+  function flushAgentAlerts() {
+    // Rechecked now: the agent may have moved on, or you may have looked.
+    var alerts = Model.pendingAlerts(root.agentPending, root.agentList, root.notifyOptions())
+    root.agentPending = []
+    var note = Model.agentNotification(alerts)
+    if (!note) return
+    root.agentLastNotified = Date.now()
+    root.sendNotification(note, alerts)
+  }
+
+  Timer {
+    id: notifyTimer
+    onTriggered: root.flushAgentAlerts()
+  }
+
+  // notify-send runs from a bash line that exits quietly without it. Text
+  // goes in as positional parameters, never into the script. A waiter keeps
+  // notify-send running (`--action` waits) so a click can focus the agent;
+  // `timeout` ends it after ten minutes whatever happens. With every waiter
+  // busy, the notification goes out without a click action.
+  readonly property string notifyScript: 'command -v notify-send >/dev/null 2>&1 || exit 0; exec timeout 600 notify-send "$@"'
+  readonly property var notifyWaiters: [notifyWaiter1, notifyWaiter2, notifyWaiter3]
+
+  function sendNotification(note, alerts) {
+    var waiter = null
+    for (var i = 0; i < root.notifyWaiters.length && !waiter; i++)
+      if (!root.notifyWaiters[i].running) waiter = root.notifyWaiters[i]
+    var command = ["bash", "-c", root.notifyScript, "spaces-notify"].concat(Model.notifyArgs(note, waiter !== null))
+    if (!waiter) {
+      Quickshell.execDetached(command)
+      return
+    }
+    waiter.paneId = note.pane_id
+    waiter.alerts = alerts.map(function(a) { return { pane_id: a.pane_id, kind: a.kind } })
+    waiter.command = command
+    waiter.running = true
+  }
+
+  // A "needs input" notification stays on screen until dismissed. Once
+  // none of its agents is in that state any more (you answered it), SIGINT
+  // makes notify-send close it. Only called with the full list of both
+  // sources: an agent missing from it counts as resolved.
+  function closeResolvedNotifications(agents) {
+    for (var i = 0; i < root.notifyWaiters.length; i++) {
+      var waiter = root.notifyWaiters[i]
+      if (waiter.running && waiter.alerts.length && !Model.pendingAlerts(waiter.alerts, agents, { mode: "all" }).length) {
+        waiter.alerts = []
+        waiter.signal(2)
+      }
+    }
+  }
+
+  // Clicking a notification focuses its agent, as clicking its row does.
+  function focusAgentPane(paneId) {
+    for (var i = 0; i < root.agentList.length; i++)
+      if (root.agentList[i].pane_id === paneId) return root.focusAgent(root.agentList[i])
+    // A reporter agent that has gone has no window left to raise.
+    if (paneId && String(paneId).indexOf("ipc:") !== 0) root.focusAgent({ pane_id: paneId })
+  }
+
+  component NotifyWaiter: Process {
+    id: waiter
+    property string paneId: ""
+    property var alerts: []
+    stdout: SplitParser {
+      onRead: function(line) { if (String(line).trim() === "default") root.focusAgentPane(waiter.paneId) }
+    }
+    onExited: alerts = []
+  }
+
+  NotifyWaiter { id: notifyWaiter1 }
+  NotifyWaiter { id: notifyWaiter2 }
+  NotifyWaiter { id: notifyWaiter3 }
+
+  // Reloading the plugin must not leave waiters behind: SIGTERM reaches
+  // notify-send through `timeout` and leaves its notification on screen.
+  Component.onDestruction: {
+    for (var i = 0; i < root.notifyWaiters.length; i++)
+      if (root.notifyWaiters[i].running) root.notifyWaiters[i].signal(15)
+  }
+
+  // "muted" or "unmuted", for the IPC calls.
+  function muteState() {
+    return root.cfg.agentMute ? "muted" : "unmuted"
+  }
+
+  function applyMute(on) {
+    if (on !== root.cfg.agentMute) root.applySetting({ agentMute: on })
+    if (on) root.agentPending = []
+    return on ? "muted" : "unmuted"
+  }
+
+  // Jumps to an agent. A reporter agent: Hyprland focuses its own terminal
+  // window, found by PID; no Herdr command runs. A Herdr agent: Herdr
+  // focuses its pane, Hyprland the window hosting Herdr. `preferred` windows
+  // (the previewed workspace's) are tried first.
   function focusAgent(agent, preferred) {
     if (!agent || !agent.pane_id) return
+    if (Model.isReporterAgent(agent)) {
+      var target = Model.agentFocusTarget(agent, (preferred || []).concat(root.allWindows))
+      if (target.address) root.focusWindow(target.address)
+      root.closeAgents()
+      root.hidePreview()
+      return
+    }
     if (root.herdrDemo) {
       // Made-up agents have no pane to focus; just raise the stand-in host.
       if (root.herdrDemoHost) root.focusWindow(root.herdrDemoHost)
@@ -897,18 +1222,19 @@ Panel {
 
   // Hovering a pill of another workspace shows a live miniature of it. One
   // card serves every pill and slides between them.
-  property int previewWorkspaceId: -1
+  // 0 is no workspace: special workspaces have negative ids.
+  property int previewWorkspaceId: 0
   property Item previewPill: null
   property bool previewWanted: false
   property string highlightAddress: ""
 
-  readonly property bool previewOpen: previewWanted && previewWorkspaceId > 0 && !root.opened && !root.agentsOpen
+  readonly property bool previewOpen: previewWanted && previewWorkspaceId !== 0 && !root.opened && !root.agentsOpen
     && root.cfg.previews && !!root.workspaceMap[previewWorkspaceId]
     && root.workspaceMap[previewWorkspaceId].windows.length > 0
 
   function pillHovered(pill, hovered) {
     if (!root.cfg.previews) return
-    if (hovered && pill.workspaceId !== root.currentWorkspaceId && pill.occupied) {
+    if (hovered && !pill.active && pill.occupied) {
       previewHideTimer.stop()
       root.previewPill = pill
       if (root.previewOpen) {
@@ -984,9 +1310,39 @@ Panel {
     onTriggered: if (!preview.containsMouse) root.hidePreview()
   }
 
-  onOpenedChanged: if (opened) { hidePreview(); closeAgents() }
+  onOpenedChanged: if (opened) { hidePreview(); closeAgents(); checkClaudeHooks() }
+
+  // Whether the Claude Code hooks are in Claude Code's settings, for a
+  // read-only line in the settings panel. Only reads; never installs.
+  property string claudeHooks: ""
+  property string claudeHooksLine: ""
+  readonly property string claudeHooksInstaller: Model.localPath(Qt.resolvedUrl("hooks/install-claude-hooks"))
+
+  function checkClaudeHooks() {
+    if (!root.cfg.agentStatus || claudeHooksCheck.running) return
+    claudeHooksCheck.running = true
+  }
+
+  Process {
+    id: claudeHooksCheck
+    command: ["bash", "-c", 'command -v python3 >/dev/null 2>&1 || exit 0; exec timeout 5 python3 "$1" status --short',
+      "spaces-claude-hooks", root.claudeHooksInstaller]
+    stdout: SplitParser { onRead: function(line) { root.claudeHooksLine = String(line).trim() } }
+    onStarted: root.claudeHooksLine = ""
+    onExited: {
+      var value = root.claudeHooksLine
+      root.claudeHooks = value === "installed" || value === "partial" || value === "not installed" ? value : ""
+    }
+  }
 
   // ------------------------------------------------------------ IPC
+
+  // One IPC handler serves every monitor's bar, so reports go to all of them.
+  function agentWidgets() {
+    var items = root.bar && typeof root.bar.moduleWidgets === "function" ? root.bar.moduleWidgets(root.moduleName) : [root]
+    if (items.indexOf(root) === -1) items = items.concat([root])
+    return items
+  }
 
   IpcHandler {
     target: "cyperx84.spaces"
@@ -998,11 +1354,26 @@ Panel {
     function toggle(): void { root.toggle() }
     function peek(workspace: string): string { return root.peek(workspace) ? "ok" : "empty" }
     function agents(): string { return root.toggleAgentsList() ? "ok" : "empty" }
+    function mute(): string { return root.applyMute(!root.cfg.agentMute) }
+    // IPC arguments are never optional, hence a second method to set it.
+    function setMute(state: string): string {
+      var on = Model.parseOnOff(state)
+      return on === null ? root.muteState() : root.applyMute(on)
+    }
     function agent(session: string, state: string, pids: string): void {
-      // One IPC handler serves every monitor's bar, so relay to all of them.
-      var items = root.bar && typeof root.bar.moduleWidgets === "function" ? root.bar.moduleWidgets(root.moduleName) : [root]
-      if (items.indexOf(root) === -1) items = items.concat([root])
+      var items = root.agentWidgets()
       for (var i = 0; i < items.length; i++) if (items[i] && typeof items[i].applyAgent === "function") items[i].applyAgent(session, state, pids)
+    }
+    // agent() with the agent's name, a title, its working directory, a line
+    // of activity and the time the report was made (unix milliseconds, or ""
+    // for now), all untrusted plain text. Returns "ok", or "ignored" for a
+    // bad session or state.
+    function report(session: string, state: string, pids: string, agent: string, title: string, cwd: string, activity: string, time: string): string {
+      if (!Model.reportAccepted(session, state)) return "ignored"
+      var items = root.agentWidgets()
+      for (var i = 0; i < items.length; i++)
+        if (items[i] && typeof items[i].applyReport === "function") items[i].applyReport(session, state, pids, agent, title, cwd, activity, time)
+      return "ok"
     }
   }
 
@@ -1019,7 +1390,7 @@ Panel {
     anchors.fill: parent
     acceptedButtons: Qt.RightButton | Qt.MiddleButton
     onClicked: function(mouse) { if (mouse.button === Qt.RightButton) root.toggle() }
-    onWheel: function(wheel) { root.scrollBy(wheel.angleDelta.y || wheel.angleDelta.x) }
+    onWheel: function(wheel) { root.scrollBy(wheel) }
   }
 
   Grid {
@@ -1028,7 +1399,8 @@ Panel {
     anchors.top: parent.top
     anchors.leftMargin: root.vertical ? Math.round((root.barSize - root.pillThickness) / 2) : 0
     anchors.topMargin: root.vertical ? 0 : Math.round((root.barSize - root.pillThickness) / 2)
-    columns: root.vertical ? 1 : Math.max(1, root.workspaceIds.length + 2)
+    // Gear, every pill (numbered and special), agents chip.
+    columns: root.vertical ? 1 : Math.max(1, root.pillIds.length + 2)
     spacing: Style.space(root.metrics.gap)
 
     // Reserve the leading slot so workspace expansion cannot move the target.
@@ -1084,7 +1456,7 @@ Panel {
 
     Repeater {
       id: pillRepeater
-      model: ScriptModel { values: root.workspaceIds }
+      model: ScriptModel { values: root.pillIds }
 
       delegate: Item {
         id: pill
@@ -1092,7 +1464,13 @@ Panel {
         required property var modelData
         readonly property int workspaceId: Number(modelData)
         readonly property var workspace: root.workspaceMap[workspaceId] || ({ id: workspaceId, windows: [] })
-        readonly property bool active: workspaceId === root.currentWorkspaceId
+        // A special workspace (negative id): toggled, not focused, and
+        // "active" while it is shown on this bar's monitor.
+        readonly property bool isSpecial: workspaceId < 0
+        readonly property var special: isSpecial ? (root.specialById[workspaceId] || null) : null
+        readonly property string specialName: special ? special.name : (workspace.name || "")
+        readonly property bool active: isSpecial ? (special !== null && special.shown) : workspaceId === root.currentWorkspaceId
+        onActiveChanged: if (active && root.previewWorkspaceId === workspaceId) root.hidePreview()
         readonly property bool occupied: workspace.windows.length > 0
         readonly property bool hovered: pillHover.hovered
         onHoveredChanged: root.pillHovered(pill, hovered)
@@ -1113,14 +1491,22 @@ Panel {
         }
         readonly property var itemKeys: iconData.items.map(function(item) { return item.key })
         readonly property color textColor: active ? root.activeText() : root.fg
-        readonly property var keys: root.keyBinds[workspaceId] || null
-        readonly property string label: Model.workspaceLabel(workspaceId, active, root.cfg.labelStyle, keys)
-        readonly property string caption: Model.workspaceCaption(workspaceId, root.cfg.labelStyle, keys)
+        readonly property var keys: isSpecial ? null : (root.keyBinds[workspaceId] || null)
+        // Special pills keep their label in every label style: without it an
+        // empty, shown scratchpad would be a blank pill.
+        readonly property string label: isSpecial ? Model.specialLabel(specialName)
+          : Model.workspaceLabel(workspaceId, active, root.cfg.labelStyle, keys)
+        readonly property string caption: isSpecial ? "" : Model.workspaceCaption(workspaceId, root.cfg.labelStyle, keys)
 
         // Shortcut tooltip: on the pill itself, not over its icons (they have
         // their own), and never on top of this pill's preview card.
         property Item hoveredIcon: null
-        readonly property string keyTip: root.cfg.keyTooltips ? Model.keyTooltip(workspaceId, keys) : ""
+        // A special pill's tooltip names it (its label may be a glyph), with
+        // the toggle and move keys when shortcut tooltips are on.
+        readonly property string keyTip: isSpecial
+          ? (root.cfg.keyTooltips || root.cfg.tooltips
+            ? Model.specialTooltip(specialName, root.cfg.keyTooltips ? root.specialKeys[Model.specialName(specialName)] : null) : "")
+          : root.cfg.keyTooltips ? Model.keyTooltip(workspaceId, keys) : ""
         readonly property bool tooltipHovered: hovered && hoveredIcon === null && keyTip !== ""
           && !(root.previewOpen && root.previewWorkspaceId === workspaceId)
         onTooltipHoveredChanged: tooltipHovered ? root.showTip(pill, keyTip, true) : root.hideTip(pill)
@@ -1182,9 +1568,10 @@ Panel {
           cursorShape: Qt.PointingHandCursor
           onClicked: {
             root.hidePreview()
-            root.clickWorkspace(pill.workspaceId)
+            if (pill.isSpecial) root.toggleSpecial(pill.specialName)
+            else root.clickWorkspace(pill.workspaceId)
           }
-          onWheel: function(wheel) { root.scrollBy(wheel.angleDelta.y || wheel.angleDelta.x) }
+          onWheel: function(wheel) { root.scrollBy(wheel) }
         }
 
         Grid {
@@ -1286,7 +1673,25 @@ Panel {
                   }
                   readonly property string agentState: item ? root.agentStateFor(item.addresses) : ""
                   readonly property bool herdrHost: !!item && root.herdrAgents.length > 0 && root.herdrHosted(item.addresses)
-                  readonly property int herdrLive: herdrHost ? root.herdrState.live : 0
+                  // Herdr's agents on the Herdr window, and reporter agents
+                  // whose window this is.
+                  readonly property var windowAgents: item ? Model.agentsForWindows(root.agentList, root.pidSet(item.addresses), herdrHost) : []
+                  readonly property int liveCount: Model.liveAgentCount(windowAgents)
+                  Component.onDestruction: if (root.agentTipItem === appIcon) root.agentTipItem = null
+
+                  // Window title, agent status and one line per agent on
+                  // this window with its time in state.
+                  function showTooltip() {
+                    if (!appIcon.item || root.previewOpen) return
+                    var tip = appIcon.item.title || appIcon.info.name
+                    if (appIcon.item.count > 1) tip = appIcon.info.name + " (" + appIcon.item.count + " windows)"
+                    var agentText = { working: "Agent working", waiting: "Agent needs your input", done: "Agent finished" }[appIcon.agentState]
+                    if (agentText) tip = agentText + " \u00b7 " + tip
+                    var hasAgents = appIcon.windowAgents.length > 0
+                    if (hasAgents) tip = [tip].concat(Model.herdrTooltipLines(appIcon.windowAgents, 48, root.tipNow())).join("\n")
+                    root.agentTipItem = hasAgents ? appIcon : null
+                    root.showTip(appIcon, tip)
+                  }
 
                   implicitWidth: iconRow.implicitWidth + Style.space(4)
                   implicitHeight: Math.max(root.iconPx, iconRow.implicitHeight) + Style.space(4)
@@ -1389,10 +1794,10 @@ Panel {
                         width: Math.max(8, Math.round(root.iconPx * 0.6))
                       }
 
-                      // How many Herdr agents are live, beside the badge,
-                      // once there is more than one.
+                      // How many agents on this window are live, beside the
+                      // badge, once there is more than one.
                       Rectangle {
-                        visible: agentBadge.visible && appIcon.herdrLive > 1
+                        visible: agentBadge.visible && appIcon.liveCount > 1
                         anchors.right: agentBadge.left
                         anchors.verticalCenter: agentBadge.verticalCenter
                         anchors.rightMargin: -Style.space(1)
@@ -1405,7 +1810,7 @@ Panel {
                         Text {
                           id: herdrCount
                           anchors.centerIn: parent
-                          text: String(appIcon.herdrLive)
+                          text: String(appIcon.liveCount)
                           color: root.bg
                           font.family: root.fontFamily
                           font.pixelSize: Math.max(7, Math.round(root.iconPx * 0.42))
@@ -1460,17 +1865,13 @@ Panel {
                       if (mouse.button === Qt.MiddleButton) root.closeWindow(appIcon.item.address)
                       else root.activateItem(appIcon.item)
                     }
-                    onWheel: function(wheel) { root.scrollBy(wheel.angleDelta.y || wheel.angleDelta.x) }
+                    onWheel: function(wheel) { root.scrollBy(wheel) }
                     onContainsMouseChanged: {
                       root.highlightAddress = containsMouse && appIcon.item ? appIcon.item.address : ""
                       if (containsMouse && appIcon.item) {
-                        var tip = appIcon.item.title || appIcon.info.name
-                        if (appIcon.item.count > 1) tip = appIcon.info.name + " (" + appIcon.item.count + " windows)"
-                        var agentText = { working: "Agent working", waiting: "Agent needs your input", done: "Agent finished" }[appIcon.agentState]
-                        if (agentText) tip = agentText + " \u00b7 " + tip
-                        if (appIcon.herdrHost) tip = [tip].concat(Model.herdrTooltipLines(root.herdrAgents, 48)).join("\n")
-                        if (!root.previewOpen) root.showTip(appIcon, tip)
+                        appIcon.showTooltip()
                       } else {
+                        if (root.agentTipItem === appIcon) root.agentTipItem = null
                         root.hideTip(appIcon)
                       }
                     }
@@ -1494,8 +1895,9 @@ Panel {
       }
     }
 
-    // Every Herdr agent at a glance, after the workspaces: how many are
-    // waiting, working and done. Click to list them.
+    // Every agent at a glance, after the workspaces: how many are waiting,
+    // working and done. Click to list them. Works without Herdr as long as
+    // a reporter (hooks/claude-hook) has agents.
     Item {
       id: agentChip
       objectName: "spacesAgentChip"
@@ -1506,7 +1908,7 @@ Panel {
       // The bar only shows a tooltip while its target says it is hovered.
       readonly property bool tooltipHovered: hovered && !root.agentsOpen
       onTooltipHoveredChanged: tooltipHovered ? root.showTip(agentChip, root.agentsTooltip()) : root.hideTip(agentChip)
-      visible: root.herdrWanted && root.agentSummary.visible
+      visible: root.cfg.agentStatus && root.agentSummary.visible
 
       // Same appear animation as the pills, each time the chip turns up.
       property real appear: 1
@@ -1556,13 +1958,13 @@ Panel {
         acceptedButtons: Qt.LeftButton
         cursorShape: Qt.PointingHandCursor
         onClicked: root.toggleAgentsList()
-        onWheel: function(wheel) { root.scrollBy(wheel.angleDelta.y || wheel.angleDelta.x) }
+        onWheel: function(wheel) { root.scrollBy(wheel) }
       }
 
       Grid {
         id: chipContent
         anchors.centerIn: parent
-        columns: root.vertical ? 1 : root.agentSegments.length + 1
+        columns: root.vertical ? 1 : root.agentSegments.length + 1 + (root.agentsMuted ? 1 : 0)
         horizontalItemAlignment: Grid.AlignHCenter
         verticalItemAlignment: Grid.AlignVCenter
         spacing: Style.space(4)
@@ -1602,6 +2004,16 @@ Panel {
               width: Math.max(8, Math.round(root.iconPx * 0.6))
             }
           }
+        }
+
+        // Bell with a slash while agent notifications are muted.
+        Text {
+          visible: root.agentsMuted
+          text: "\uf1f6"
+          color: agentChip.textColor
+          opacity: 0.6
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
         }
       }
     }
@@ -1643,9 +2055,14 @@ Panel {
     readonly property var area: workspace ? workspace.area : null
     readonly property real desiredMapWidth: Style.space(Model.previewWidth(root.cfg.previewSize))
     readonly property real horizontalInset: padding * 2 + Style.space(4)
-    // Herdr agents get a strip on the card of a workspace holding Herdr.
-    readonly property bool showAgents: root.herdrAgents.length > 0 && workspace !== null
-      && root.herdrHosted(workspace.windows.map(function(w) { return w.address }))
+    // Agent rows on the card of a workspace holding the Herdr window (all of
+    // Herdr's agents) or a reporter agent's window (that agent).
+    readonly property var agentRows: {
+      if (!workspace) return []
+      var addresses = workspace.windows.map(function(w) { return w.address })
+      return Model.agentsForWindows(root.agentList, root.pidSet(addresses), root.herdrAgents.length > 0 && root.herdrHosted(addresses))
+    }
+    readonly property bool showAgents: agentRows.length > 0
     readonly property real chromeHeight: previewHeader.implicitHeight + previewFooter.implicitHeight
       + previewColumn.spacing * 2 + verticalContentInset
       + (showAgents ? previewAgents.implicitHeight + previewColumn.spacing : 0)
@@ -1690,7 +2107,9 @@ Panel {
           anchors.right: previewCount.left
           anchors.rightMargin: Style.space(8)
           anchors.verticalCenter: parent.verticalCenter
-          text: "Workspace " + (root.previewWorkspaceId === 10 ? "0" : root.previewWorkspaceId)
+          text: preview.workspace && preview.workspace.special ? Model.specialTitle(preview.workspace.name)
+            : "Workspace " + (root.previewWorkspaceId === 10 ? "0" : root.previewWorkspaceId)
+          textFormat: Text.PlainText
           color: root.fg
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
@@ -1748,8 +2167,8 @@ Panel {
         }
       }
 
-      // One row per Herdr agent; click one to jump to it. Left out entirely
-      // for other workspaces, so their card keeps its usual layout.
+      // One row per agent on this workspace; click one to jump to it. Left
+      // out entirely for other workspaces, so their card keeps its usual layout.
       Column {
         id: previewAgents
         readonly property int maxRows: 5
@@ -1758,7 +2177,7 @@ Panel {
         spacing: Style.space(1)
 
         Repeater {
-          model: preview.showAgents ? root.sortedAgents.slice(0, previewAgents.maxRows) : []
+          model: preview.agentRows.slice(0, previewAgents.maxRows)
 
           delegate: Item {
             id: stripRow
@@ -1800,14 +2219,34 @@ Panel {
             Text {
               anchors.left: stripLabel.right
               anchors.leftMargin: Style.space(6)
-              anchors.right: parent.right
-              anchors.rightMargin: Style.space(4)
+              anchors.right: stripMeta.visible ? stripMeta.left : parent.right
+              anchors.rightMargin: stripMeta.visible ? Style.space(6) : Style.space(4)
               anchors.verticalCenter: parent.verticalCenter
-              text: stripRow.modelData.title
+              text: root.cfg.agentDetails ? Model.agentDetailText(stripRow.modelData) : stripRow.modelData.title
               textFormat: Text.PlainText
               elide: Text.ElideRight
               color: root.fg
               opacity: 0.7
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            // Time in state and usage, dimmed at the right end.
+            Text {
+              id: stripMeta
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(4)
+              anchors.verticalCenter: parent.verticalCenter
+              visible: root.cfg.agentDetails && text !== ""
+              // Measured apart: an elided text bound to its own implicit
+              // width is a binding loop.
+              width: Math.min(Math.ceil(stripMetaMetrics.advanceWidth) + 1, parent.width * 0.4)
+              TextMetrics { id: stripMetaMetrics; font: stripMeta.font; text: stripMeta.text }
+              text: [Model.agentStateText(stripRow.modelData, root.agentClock), Model.agentTokenText(stripRow.modelData.tokens)].filter(function(t) { return t !== "" }).join(" \u00b7 ")
+              textFormat: Text.PlainText
+              elide: Text.ElideRight
+              color: root.fg
+              opacity: 0.5
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
             }
@@ -1823,9 +2262,9 @@ Panel {
         }
 
         Text {
-          visible: root.sortedAgents.length > previewAgents.maxRows
+          visible: preview.agentRows.length > previewAgents.maxRows
           width: parent.width
-          text: "+" + (root.sortedAgents.length - previewAgents.maxRows) + " more in Herdr"
+          text: "+" + (preview.agentRows.length - previewAgents.maxRows) + " more"
           color: root.fg
           opacity: 0.5
           horizontalAlignment: Text.AlignHCenter
@@ -2016,7 +2455,7 @@ Panel {
             anchors.left: parent.left
             anchors.leftMargin: Style.space(4)
             anchors.verticalCenter: parent.verticalCenter
-            text: "Herdr agents"
+            text: "Agents"
             color: root.fg
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
@@ -2043,7 +2482,7 @@ Panel {
           width: parent.width
           topPadding: Style.space(6)
           bottomPadding: Style.space(6)
-          text: "No agents in Herdr"
+          text: "No agents"
           color: root.fg
           opacity: 0.5
           horizontalAlignment: Text.AlignHCenter
@@ -2091,7 +2530,8 @@ Panel {
 
                 Text {
                   id: agentWorkspace
-                  width: Math.min(implicitWidth, parent.width - agentNumber.implicitWidth - parent.spacing)
+                  width: Math.min(implicitWidth, parent.width - agentNumber.implicitWidth - parent.spacing
+                    - (agentStateLabel.visible ? agentStateLabel.implicitWidth + parent.spacing : 0))
                   text: agentRow.modelData.workspace_label || "Workspace"
                   textFormat: Text.PlainText
                   elide: Text.ElideRight
@@ -2112,16 +2552,45 @@ Panel {
                   font.pixelSize: Style.font.caption
                   font.bold: true
                 }
+
+                // "blocked 4m": the state and how long it has lasted.
+                Text {
+                  id: agentStateLabel
+                  anchors.baseline: agentWorkspace.baseline
+                  visible: root.cfg.agentDetails
+                  text: Model.agentStateText(agentRow.modelData, root.agentClock)
+                  textFormat: Text.PlainText
+                  color: root.fg
+                  opacity: 0.5
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                }
               }
 
+              // What the agent is doing, or its pane title (a reporter
+              // agent's working directory).
               Text {
                 width: parent.width
                 visible: text !== ""
-                text: agentRow.modelData.title
+                text: root.cfg.agentDetails ? Model.agentDetailText(agentRow.modelData) : agentRow.modelData.title
                 textFormat: Text.PlainText
                 elide: Text.ElideRight
                 color: root.fg
                 opacity: 0.75
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              // Model, context, cost and branch, as Herdr reports them
+              // (reporter agents have none).
+              Text {
+                width: parent.width
+                visible: root.cfg.agentDetails && text !== ""
+                text: Model.agentTokenText(agentRow.modelData.tokens)
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                color: root.fg
+                opacity: 0.45
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
               }
@@ -2235,6 +2704,7 @@ Panel {
       anchors.fill: parent
       cfg: root.cfg
       bar: root.bar
+      claudeHooks: root.claudeHooks
       fg: root.fg
       fontFamily: root.fontFamily
       onSettingChanged: function(delta) { root.applySetting(delta) }

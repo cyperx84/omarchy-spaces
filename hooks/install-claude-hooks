@@ -1,0 +1,362 @@
+#!/usr/bin/env python3
+"""Add or remove the Spaces hooks in Claude Code's settings.
+
+    install-claude-hooks install [--dry-run]
+    install-claude-hooks remove  [--dry-run]
+    install-claude-hooks status  [--short]
+
+Run it yourself; Spaces never runs it. It edits $CLAUDE_CONFIG_DIR/settings.json
+(default ~/.claude/settings.json) and nothing else:
+
+- install adds one hook group per event below, each running hooks/claude-hook
+  from the installed plugin (~/.config/omarchy/plugins/cyperx84.spaces), so
+  `omarchy plugin update` keeps it current. Existing hooks and settings stay
+  as they are, and running it again changes nothing.
+- remove deletes exactly the hooks whose command runs the hook: its first
+  word is hooks/claude-hook's path, or any path ending in
+  /.config/omarchy/plugins/cyperx84.spaces/hooks/claude-hook (a moved home).
+  A command that only mentions the path is not ours. Groups and event lists
+  that this leaves empty are deleted; the "hooks" object and lists that were
+  empty already stay.
+- Before any change it copies the file to settings.json.spaces-backup-<time>
+  next to it, then writes the new file atomically (a temporary file in the
+  same directory, renamed over it). A symlinked settings.json is followed.
+- A file that is not valid JSON (NaN and Infinity included), whose "hooks"
+  is not an object of lists, that is not writable, or that changes while the
+  installer runs, is refused and left alone.
+- --dry-run prints the plan and writes nothing.
+
+Exit status: 0 done (or nothing to do), 1 usage, 2 refused or failed.
+Standard library only.
+"""
+
+import copy
+import datetime
+import json
+import os
+import shlex
+import shutil
+import sys
+import tempfile
+
+MARKER = "/.config/omarchy/plugins/cyperx84.spaces/hooks/claude-hook"
+EVENTS = [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "PermissionRequest",
+    "Notification",
+    "Stop",
+    "StopFailure",
+    "SessionEnd",
+]
+
+
+class Refused(Exception):
+    pass
+
+
+def settings_path():
+    base = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    return os.path.join(base, "settings.json")
+
+
+def hook_path():
+    return os.path.join(os.path.expanduser("~"), ".config", "omarchy", "plugins", "cyperx84.spaces", "hooks", "claude-hook")
+
+
+def hook_command():
+    return shlex.quote(hook_path())
+
+
+def our_group():
+    return {"hooks": [{"type": "command", "command": hook_command(), "async": True}]}
+
+
+def is_ours(hook):
+    """Whether the hook runs claude-hook: the command's first word is its
+    path, here or under another home. Mentioning it elsewhere does not count."""
+    if not isinstance(hook, dict) or not isinstance(hook.get("command"), str):
+        return False
+    try:
+        words = shlex.split(hook["command"], comments=True)
+    except ValueError:
+        return False
+    return bool(words) and (words[0] == hook_path() or words[0].endswith(MARKER))
+
+
+def finite(text):
+    value = float(text)
+    if value != value or value in (float("inf"), float("-inf")):
+        raise ValueError("number out of range: %s" % text)
+    return value
+
+
+def no_constant(name):
+    raise ValueError("%s is not JSON" % name)
+
+
+def read_raw(path):
+    """The file's bytes, or None when it does not exist."""
+    try:
+        with open(path, "rb") as handle:
+            return handle.read()
+    except FileNotFoundError:
+        return None
+
+
+def load(path):
+    """(settings dict, existed, raw bytes or None). Refuses anything it could
+    not safely rewrite."""
+    try:
+        raw = read_raw(path)
+    except OSError as error:
+        raise Refused("cannot read %s: %s" % (path, error))
+    if raw is None:
+        return {}, False, None
+    if raw.strip() == b"":
+        return {}, True, raw
+    try:
+        data = json.loads(raw.decode("utf-8"), parse_constant=no_constant, parse_float=finite)
+    except ValueError as error:
+        raise Refused("%s is not valid JSON (%s); fix it first, nothing was changed" % (path, error))
+    if not isinstance(data, dict):
+        raise Refused("%s does not hold a JSON object; nothing was changed" % path)
+    hooks = data.get("hooks", {})
+    if not isinstance(hooks, dict):
+        raise Refused('"hooks" in %s is not an object; nothing was changed' % path)
+    for event, groups in hooks.items():
+        if not isinstance(groups, list):
+            raise Refused('"hooks.%s" in %s is not a list; nothing was changed' % (event, path))
+    return data, True, raw
+
+
+def strip_ours(data):
+    """A copy of data without our hooks, and [(event, command)] removed."""
+    out = copy.deepcopy(data)
+    removed = []
+    hooks = out.get("hooks")
+    if not isinstance(hooks, dict):
+        return out, removed
+    for event in list(hooks.keys()):
+        groups = []
+        before = len(removed)
+        for group in hooks[event]:
+            inner = group.get("hooks") if isinstance(group, dict) else None
+            if not isinstance(inner, list) or not any(is_ours(h) for h in inner):
+                groups.append(group)
+                continue
+            for hook in inner:
+                if is_ours(hook):
+                    removed.append((event, hook["command"]))
+            kept = [h for h in inner if not is_ours(h)]
+            if kept:
+                group = dict(group)
+                group["hooks"] = kept
+                groups.append(group)
+        if groups or len(removed) == before:
+            hooks[event] = groups
+        else:
+            del hooks[event]
+    return out, removed
+
+
+def with_ours(data):
+    out, _ = strip_ours(data)
+    hooks = out.setdefault("hooks", {})
+    for event in EVENTS:
+        hooks.setdefault(event, []).append(our_group())
+    return out
+
+
+def find_ours(data):
+    """{event: [commands]} of our hooks."""
+    found = {}
+    hooks = data.get("hooks") if isinstance(data, dict) else None
+    for event, groups in (hooks or {}).items():
+        for group in groups if isinstance(groups, list) else []:
+            inner = group.get("hooks") if isinstance(group, dict) else None
+            for hook in inner if isinstance(inner, list) else []:
+                if is_ours(hook):
+                    found.setdefault(event, []).append(hook["command"])
+    return found
+
+
+def herdr_hooks(data):
+    """Events whose hooks mention Herdr (Herdr's own Claude Code integration)."""
+    events = []
+    hooks = data.get("hooks") if isinstance(data, dict) else None
+    for event, groups in (hooks or {}).items():
+        for group in groups if isinstance(groups, list) else []:
+            inner = group.get("hooks") if isinstance(group, dict) else None
+            for hook in inner if isinstance(inner, list) else []:
+                if isinstance(hook, dict) and "herdr" in str(hook.get("command", "")).lower() and event not in events:
+                    events.append(event)
+    return events
+
+
+def state_of(data):
+    found = find_ours(data)
+    command = hook_command()
+    complete = all(found.get(e) == [command] for e in EVENTS) and set(found) == set(EVENTS)
+    if complete:
+        return "installed"
+    return "partial" if found else "not installed"
+
+
+def unchanged(target, raw):
+    """Refuses when the file is no longer what was read."""
+    try:
+        now = read_raw(target)
+    except OSError as error:
+        raise Refused("cannot read %s again: %s" % (target, error))
+    if now != raw:
+        raise Refused("%s changed while the installer ran; nothing was changed, run it again" % target)
+
+
+def write(path, data, existed, raw):
+    """Backup, then an atomic replace. Returns the backup path or None.
+    Refuses a file that is not writable or no longer holds `raw`."""
+    target = os.path.realpath(path)
+    directory = os.path.dirname(target)
+    if existed and not os.access(target, os.W_OK):
+        raise Refused("%s is not writable; nothing was changed" % target)
+    unchanged(target, raw)
+    os.makedirs(directory, exist_ok=True)
+    backup = None
+    mode = 0o600
+    if existed:
+        mode = os.stat(target).st_mode & 0o777
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup = "%s.spaces-backup-%s" % (target, stamp)
+        n = 1
+        while os.path.exists(backup):
+            n += 1
+            backup = "%s.spaces-backup-%s-%d" % (target, stamp, n)
+        shutil.copy2(target, backup)
+    fd, temp = tempfile.mkstemp(prefix=".settings.json.", suffix=".spaces-tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2, ensure_ascii=False, allow_nan=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temp, mode)
+        unchanged(target, raw)
+        os.replace(temp, target)
+    except BaseException:
+        for leftover in (temp, backup):
+            try:
+                if leftover:
+                    os.unlink(leftover)
+            except OSError:
+                pass
+        raise
+    return backup
+
+
+def install(dry_run):
+    path = settings_path()
+    data, existed, raw = load(path)
+    if state_of(data) == "installed":
+        print("Claude Code hooks for Spaces are already installed in %s; nothing to change." % path)
+        return 0
+    stripped, removed = strip_ours(data)
+    for event, command in removed:
+        print("- %s: %s (replaced)" % (event, command))
+    print("%s %s:" % ("Would add to" if dry_run else "Adding to", path))
+    for event in EVENTS:
+        print("+ %s: %s (async)" % (event, hook_command()))
+    if not os.access(hook_path(), os.X_OK):
+        print("Note: %s is not there yet (or not executable); the hooks do nothing until it is." % hook_path())
+    if dry_run:
+        print("Dry run: nothing was written.")
+        return 0
+    backup = write(path, with_ours(stripped), existed, raw)
+    if backup:
+        print("Backup: %s" % backup)
+    print("Installed %d hooks. New Claude Code sessions report to Spaces; restart running ones." % len(EVENTS))
+    return 0
+
+
+def remove(dry_run):
+    path = settings_path()
+    data, existed, raw = load(path)
+    stripped, removed = strip_ours(data)
+    if not removed:
+        print("No Spaces hooks in %s; nothing to change." % path)
+        return 0
+    print("%s %s:" % ("Would remove from" if dry_run else "Removing from", path))
+    for event, command in removed:
+        print("- %s: %s" % (event, command))
+    if dry_run:
+        print("Dry run: nothing was written.")
+        return 0
+    backup = write(path, stripped, existed, raw)
+    if backup:
+        print("Backup: %s" % backup)
+    print("Removed %d hooks. Other hooks and settings were left as they were." % len(removed))
+    return 0
+
+
+def status(short):
+    path = settings_path()
+    try:
+        data, existed, _ = load(path)
+    except Refused as error:
+        if short:
+            print("unknown")
+            return 2
+        raise
+    state = state_of(data)
+    if short:
+        print(state)
+        return 0
+    print("Claude Code settings: %s%s" % (path, "" if existed else " (does not exist)"))
+    print("Spaces hooks: %s" % state)
+    found = find_ours(data)
+    if state == "partial":
+        missing = [e for e in EVENTS if e not in found]
+        if missing:
+            print("  missing: %s" % ", ".join(missing))
+        stale = sorted(e for e, cmds in found.items() if cmds != [hook_command()])
+        if stale:
+            print("  different or repeated: %s" % ", ".join(stale))
+        print("  Run `install-claude-hooks install` to repair, or `remove` to take them out.")
+    elif state == "not installed":
+        print("  Run `%s install` to add them." % os.path.join(os.path.dirname(hook_path()), "install-claude-hooks"))
+    herdr = herdr_hooks(data)
+    print("Herdr hooks in Claude Code: %s" % ("yes (%s)" % ", ".join(herdr) if herdr else "none"))
+    print("herdr command: %s" % ("found" if shutil.which("herdr") else "not found"))
+    if herdr:
+        print("  Sessions inside Herdr are reported by Herdr; claude-hook stays quiet there (HERDR_ENV=1).")
+    return 0
+
+
+USAGE = "usage: install-claude-hooks install|remove|status [--dry-run] [--short]"
+
+
+def main(argv):
+    args = [a for a in argv if not a.startswith("--")]
+    flags = [a for a in argv if a.startswith("--")]
+    if len(args) != 1 or args[0] not in ("install", "remove", "status") or any(f not in ("--dry-run", "--short") for f in flags):
+        print(USAGE, file=sys.stderr)
+        return 1
+    dry_run = "--dry-run" in flags
+    try:
+        if args[0] == "install":
+            return install(dry_run)
+        if args[0] == "remove":
+            return remove(dry_run)
+        return status("--short" in flags)
+    except Refused as error:
+        print("Refused: %s" % error, file=sys.stderr)
+        return 2
+    except OSError as error:
+        print("Failed: %s" % error, file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -2,6 +2,29 @@
 
 All notable changes to Spaces. Versions follow [semantic versioning](https://semver.org).
 
+## 2.2.0
+
+### Added
+
+- Agent details: rows in the agents popup and on the preview card show what each agent is doing (Herdr's label for its state, such as `running: npm test`), how long it has been in its state (`blocked 4m`), and its model, context, cost and branch when Herdr reports them. Agent tooltips gain the time in state too. New "Agent details" setting (`agentDetails`), on by default
+- Desktop notifications when an agent needs your input, such as "docs needs input", with the agent's activity as the body. Click one to jump to that agent. Nothing is sent about the agent you are looking at or about agents already blocked when the shell starts, each agent alerts once per state, and bursts are combined into one notification at most every three seconds. A "needs input" notification closes itself once you answer the agent, or when the agent goes away (including Herdr quitting); this holds for up to three notifications at a time and for ten minutes each, and one sent while three are open stays until you dismiss it. New "Agent notifications" setting (`agentNotify`): Off, Needs input (the default) or Needs input + finished
+- Mute agent notifications with `omarchy-shell cyperx84.spaces mute` (toggles, prints `muted` or `unmuted`), `setMute on|off`, or the new "Mute agent notifications" setting (`agentMute`). The agents chip shows a bell with a slash while muted
+- Agent status without Herdr. Claude Code run in a plain terminal reports through its hooks: `hooks/claude-hook` maps Claude Code's events to working, waiting, done and end (and `idle_prompt` to settle, see below), finds the terminal window through its parent processes and reports to the bar in the background. Install the hooks once with `~/.config/omarchy/plugins/cyperx84.spaces/hooks/install-claude-hooks install`; it backs up `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR/settings.json`), adds nine async hooks next to your own, and `remove` takes exactly those out again: only hooks whose command starts with the hook's path count as its own, never one that merely mentions it. It refuses a read-only `settings.json`, a file that changes while it runs, and JSON with `NaN` or `Infinity`, and writes nothing then. `status` and `--dry-run` show what is there and what would change. Spaces never runs it for you. The hook does nothing inside Herdr, which reports those sessions itself
+- Agents that report through IPC are now full agents: they are counted in the agents chip, listed in the popup, shown on the preview card of the workspace holding their window and in their icon's tooltip, and send notifications, which stay quiet while their own window is active. Clicking one focuses its terminal window. A session listed by both Herdr and a reporter shows once, as Herdr's
+- New `report` IPC method: `report <session> <state> <pids> <agent> <title> <cwd> <activity> <time>`, returning `ok` or `ignored`. Text is treated as untrusted and capped, and a report made before the last one for its session, or before the session's `end`, is ignored. At most 64 reporter sessions are kept, and one with no PID to check is removed 30 minutes after its last report. The session names `__proto__`, `constructor` and `prototype` are refused. `agent <session> <state> <pids>` works as before, except that its `done` and `idle` sessions are now removed 30 minutes after their last report
+- New reporter state `settle`, for both IPC methods: a working or waiting session turns idle, a done or idle one stays as it is. `hooks/claude-hook` sends it for Claude Code's `idle_prompt` notification (about a minute after Claude stops, if you have not typed), so a session you interrupted with Esc, for which Claude Code sends no Stop, no longer spins or shows `!` until your next prompt
+- The Windows settings page shows whether the Claude Code hooks are installed, read-only, with the command to install them
+- Scratchpad pill: while Hyprland's scratchpad (a special workspace) has windows or is shown, it gets a pill after the numbered ones, with a layers glyph and the icons of its windows, agent badges, urgent pulse and preview card like any pill. Click it to show or hide the scratchpad; click an icon in it to bring up that window. It wears the active style while the scratchpad is shown. Other special workspaces get a pill too, labelled with their short name or first letter. Its tooltip names it and, with shortcut tooltips on, the keys that toggle it and move a window to it, read from Omarchy's "Toggle scratchpad" and "Move window to scratchpad" binds or from classic `togglespecialworkspace` and `movetoworkspace special:NAME` binds. New "Show scratchpad" setting (`showSpecial`) on the Workspaces page, on by default
+- New "Reverse scroll direction" setting (`reverseScroll`) under Behaviour, off by default, shown when scrolling switches workspaces
+
+### Changed
+
+- `hooks/herdr-feed` passes on each agent's activity, tokens (at most eight short entries), working directory, and the time it entered its current state
+- Demo mode's agents have activities, usage and times in state, so the new details can be tried without Herdr. They never send notifications
+- The agents chip, popup, details, notifications and mute work without Herdr, and their settings no longer need "Herdr agents" on. "Herdr agents" off now hides only Herdr's agents. The popup is titled "Agents", and its empty state reads "No agents"
+- Reporter sessions from `report` are rechecked every minute in any state, so a killed Claude Code leaves no row or badge behind for more than about a minute
+- Scrolling moves one workspace per touchpad swipe or wheel notch instead of one per scroll event, so a single swipe no longer skips several workspaces. A touchpad steps once a swipe has travelled 100 pixels and ignores the rest of that swipe until the fingers lift (from the scroll phases Qt gives touchpads on Wayland; without phases, for 350 ms after each step); a wheel steps once per notch with a 150 ms pause to absorb free-spinning wheels; a partial scroll is forgotten after 400 ms. Sideways scrolls are ignored on a horizontal bar and count on a vertical one. Scrolling skips special workspaces, and starts from the last numbered workspace while the focused one is not numbered
+
 ## 2.1.0
 
 ### Added
@@ -42,7 +65,7 @@ The first release of Spaces as its own project, `cyperx84.spaces`, built on [oma
 
 ### Removed
 
-- The Claude Code hook, the OpenCode plugin and the omp extension. Agents in Herdr are covered by the Herdr feed, and any other agent can still report through `omarchy-shell cyperx84.spaces agent <session> <state> <pids>`; see [docs/agents.md](docs/agents.md#reporting-agents-outside-herdr)
+- The Claude Code hook, the OpenCode plugin and the omp extension. Agents in Herdr are covered by the Herdr feed, and any other agent can still report through `omarchy-shell cyperx84.spaces agent <session> <state> <pids>`; see [docs/agents.md](docs/agents.md#reporting-agents-from-your-own-scripts)
 
 ## Before 2.0: omarchy-spaces by Tornike Gomareli
 

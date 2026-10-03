@@ -10,7 +10,7 @@ Spaces runs inside the Omarchy shell, a Quickshell instance, so its warnings and
 qs log -p /usr/share/omarchy/shell
 ```
 
-Add `-f` to follow it live, or `-t 200` for only the last 200 lines. Lines mentioning `Spaces.qml`, `SpacesSettings.qml` or `Model.js` come from this plugin. Spaces is quiet by design when Herdr is missing, so an empty log is not a sign of trouble.
+Add `-f` to follow it live, or `-t 200` for only the last 200 lines. Lines mentioning `Spaces.qml`, `SpacesSettings.qml` or `Model.js` come from this plugin. Spaces is quiet by design when Herdr or the Claude Code hooks are missing, so an empty log is not a sign of trouble.
 
 ## The widget does not appear after installing
 
@@ -33,7 +33,7 @@ If it is enabled but still missing, check that `~/.config/omarchy/plugins/cyperx
 
 ## No agent badges
 
-Work through these in order.
+If you run Claude Code without Herdr, see [No badges for Claude Code without Herdr](#no-badges-for-claude-code-without-herdr). For Herdr, work through these in order.
 
 **"Agent status" or "Herdr agents" is off.** Both are under Windows in the settings panel and on by default. "Herdr agents" is only shown while "Agent status" is on.
 
@@ -52,6 +52,64 @@ It should print one line of JSON starting with `{"type":"herdr"`. No output mean
 **No window hosts a Herdr client.** The badge goes on the window that runs the `herdr` client. If Herdr's server is running but no terminal is attached to it, there is no window to badge. The agents chip still shows the agents. Attach with `herdr` in a terminal.
 
 **The agent is idle.** Idle and unknown agents get no badge. The agents chip with "Agents chip" set to Always shows them as a plain count.
+
+## No badges for Claude Code without Herdr
+
+Work through these in order.
+
+**The hooks are not installed.** Claude Code only reports to Spaces once its hooks are in its settings. Check, and install if needed:
+
+```sh
+~/.config/omarchy/plugins/cyperx84.spaces/hooks/install-claude-hooks status
+~/.config/omarchy/plugins/cyperx84.spaces/hooks/install-claude-hooks install
+```
+
+`status` reads `partial` when some are missing or point somewhere else; `install` repairs that. If you keep Claude Code's settings somewhere else, set `CLAUDE_CONFIG_DIR` the same way for the installer.
+
+**The session started before the hooks.** Claude Code reads its hooks when a session starts. Restart sessions that were running when you installed them. After that, a session appears in the chip (with "Agents chip" set to Always) as soon as it starts, and gets a badge once you send a prompt.
+
+**"Agent status" is off.** It is under Windows in the settings panel. "Herdr agents" can be off; it only affects Herdr.
+
+**The session runs inside Herdr.** The hook stays quiet inside Herdr (`HERDR_ENV=1`), since Herdr reports those sessions itself. Turn on "Herdr agents" and follow [No agent badges](#no-agent-badges).
+
+**The session runs inside tmux, zellij or screen.** The hook finds the terminal window through Claude Code's parent processes, and a multiplexer's server is not under any window. The session is still in the chip and the popup, without a workspace number, but no window gets a badge. Run Claude Code directly in a terminal window to get the badge.
+
+**`omarchy-shell` cannot reach the shell from Claude Code.** The hook does nothing when `omarchy-shell` is not on Claude Code's `PATH`, and `omarchy-shell` needs `OMARCHY_PATH` in its environment. Both are set in an Omarchy desktop session, but may not be in a Claude Code started over ssh or from a service. Try a report by hand from the same terminal; this one reports this terminal as working, then removes it:
+
+```sh
+omarchy-shell cyperx84.spaces report spaces-test working "$$" test test "$PWD" "" ""
+omarchy-shell cyperx84.spaces report spaces-test end "" "" "" "" "" ""
+```
+
+The first call should print `ok` and the terminal's icon should spin until the second. `Function not found.` means the shell runs an older Spaces: run `omarchy restart shell`.
+
+**`python3` is missing.** The hook is a Python 3 script. Without `python3`, Claude Code shows a hook error in its debug log (`claude --debug`) and nothing reaches Spaces.
+
+**The shell restarted.** Spaces keeps reporter agents in memory only. After `omarchy restart shell`, a session shows again with its next report: the next prompt or tool call.
+
+**It is a remote session.** Claude Code on the web (`CLAUDE_CODE_REMOTE=true`) has no local window, so the hook does nothing.
+
+**The badge stays `!` after you approved a tool.** Claude Code has no event for an approval, so the badge turns back into a spinner once that tool finishes.
+
+## No agent notifications
+
+Work through these in order.
+
+**Notifications are off or muted.** "Agent notifications" is under Windows in the settings panel; it must be Needs input or Needs input + finished. If the agents chip shows a bell with a slash, notifications are muted: run `omarchy-shell cyperx84.spaces setMute off`, or turn off "Mute agent notifications".
+
+**You were looking at the agent.** No notification is sent for the agent focused in Herdr while the Herdr window is the active window, or for a Claude Code session (or other reporter agent) whose own terminal is the active window. Switch to another window and wait for the next time it needs you.
+
+**The agent was already blocked.** The first snapshot after the shell or Herdr starts only records each Herdr agent's state. An agent that was already waiting then does not notify until it leaves that state and enters it again. The badge and the chip still show it.
+
+**Only finished agents.** With "Needs input", finishing sends nothing. Choose "Needs input + finished" to be told about those too.
+
+**`notify-send` is missing.** Spaces sends with `notify-send` and stays silent without it. Check with `command -v notify-send`; on Arch it comes with `libnotify`. To see whether your notification daemon shows them at all, run `notify-send -a Spaces "Spaces test" "hello"`.
+
+**Do Not Disturb is on.** Omarchy's Do Not Disturb holds Spaces' notifications back like any other app's.
+
+**Demo mode is on.** The scripted demo agents never send notifications.
+
+**Two notifications for one agent.** Herdr has notification settings of its own, `[ui.toast]` and `[ui.sound]` in `~/.config/herdr/config.toml`, separate from Spaces'. Turn off one of the two.
 
 ## The badge is on the wrong window, or on every terminal window
 
@@ -84,6 +142,18 @@ It should print one line of JSON starting with `{"type":"herdr"`. No output mean
 **The agents popup or the settings panel is open.** Previews wait until they close.
 
 **Windows show as grey boxes.** Each window in the miniature is captured with Wayland screen copy, and shows a grey box until its first frame arrives. A window that never delivers a frame stays grey. If every window stays grey, check the [shell log](#reading-the-shell-log) for screencopy errors. With "Live video" off, the miniature shows a single frame and does not update.
+
+## The scratchpad pill does not show
+
+**The scratchpad is empty.** The pill shows while the scratchpad has windows or is shown on this bar's monitor. Move a window there with `SUPER + ALT + S` and it appears. Hyprland drops an empty special workspace once it is hidden, and its pill goes with it.
+
+**"Show scratchpad" is off.** Turn it on under Workspaces, or run `omarchy bar set cyperx84.spaces showSpecial true --json`.
+
+**"Only this monitor's workspaces" is on and the scratchpad lives on another monitor.** A special workspace belongs to the monitor it was last shown on; with that setting on, only that monitor's bar lists it.
+
+**Check what Hyprland reports.** `hyprctl workspaces -j | jq '.[] | select(.name | startswith("special:")) | {id, name, monitor, windows}'` lists the special workspaces and their window counts, and `hyprctl monitors -j | jq '.[] | {name, specialWorkspace}'` says which one each monitor shows. A workspace named with `name:` rather than `special:` is a named workspace, which Spaces does not list.
+
+**The pill does not light up when the scratchpad opens.** Spaces reads which special workspace each monitor shows once at startup, then follows Hyprland's `activespecial` events. If the highlight is wrong, `omarchy restart shell` reads it afresh.
 
 ## Icons show a letter tile
 

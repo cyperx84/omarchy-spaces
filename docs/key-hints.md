@@ -63,6 +63,34 @@ o.bind("ALT + SHIFT + J", "Move window to workspace 1", hl.dsp.window.move({ wor
 
 Only a plain workspace number counts as the argument. Relative or named targets such as `e+1`, `previous` or `name:web` are not tied to one pill and are skipped.
 
+## Special workspaces
+
+The scratchpad pill, and the pill of any other special workspace, has a tooltip of its own. It always names the workspace, since its label may be only a glyph, and adds the keys that toggle it and move a window to it when "Shortcut tooltips" is on:
+
+```text
+Scratchpad · SUPER + S to toggle · SUPER + ALT + S to move window here
+```
+
+With "Shortcut tooltips" off, or without binds, the tooltip reads just `Scratchpad` (or the special workspace's name); with both "Shortcut tooltips" and "Tooltips" off there is none. Special pills keep their glyph or short name in every label style, and never show a key caption.
+
+These binds are read from the same `hyprctl binds -j` and `hooks/bind-keys` data as the workspace binds, so keys made by key code are recovered the same way. Lua binds count by description, ignoring case:
+
+| Description | Counts as |
+| --- | --- |
+| `Toggle scratchpad` | Toggle key for the scratchpad |
+| `Toggle special workspace NAME` | Toggle key for special workspace NAME (without NAME, the unnamed one) |
+| `Move window to scratchpad`, `Move window silently to scratchpad` | Move key for the scratchpad |
+| `Move window to special workspace NAME`, `Move window silently to special workspace NAME` | Move key for special workspace NAME |
+
+Omarchy's stock binds, `o.bind("SUPER + S", "Toggle scratchpad", ...)` and `o.bind("SUPER + ALT + S", "Move window to scratchpad", ...)`, match the first and third rows. Classic binds count by dispatcher:
+
+| Dispatcher | Argument | Counts as |
+| --- | --- | --- |
+| `togglespecialworkspace` | `NAME`, or empty for the unnamed one | Toggle key |
+| `movetoworkspace`, `movetoworkspacesilent` | `special:NAME`, or `special` for the unnamed one | Move key |
+
+When several binds reach the same special workspace, a plain move beats a silent one, and otherwise the first listed wins. Submap and mouse binds are skipped, as for workspaces.
+
 ## How missing keys are recovered
 
 Hyprland 0.56 lists two kinds of bind without a key name:
