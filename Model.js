@@ -18,7 +18,7 @@ var DEFAULTS = {
   titleLength: 24,
   activeStyle: "subtle",      // "subtle" | "solid" | "accent"
   pillBackground: true,       // quiet fill behind occupied/hovered pills
-  labelStyle: "number",       // "number" | "glyph" | "none"
+  labelStyle: "both",         // "number" | "key" | "both" | "glyph" | "none"
   animations: true,
   animationSpeed: "normal",   // "slow" | "normal" | "fast"
   scrollSwitch: true,
@@ -26,6 +26,7 @@ var DEFAULTS = {
   urgentHighlight: true,      // pulse workspaces whose windows ask for attention
   middleClickClose: false,    // middle-click an icon closes that window
   tooltips: true,
+  keyTooltips: true,          // a pill's tooltip names the keys that reach it
   density: "normal",          // "compact" | "normal" | "roomy"
   activeClick: "none",        // clicking the active pill: "none" | "previous"
   settingsButton: "never",    // gear button: "hover" | "always" | "never"
@@ -43,7 +44,7 @@ var ACTIVE_CLICKS = ["none", "previous"]
 var SETTINGS_BUTTONS = ["hover", "always", "never"]
 var PREVIEW_SIZES = ["small", "medium", "large"]
 var ACTIVE_STYLES = ["subtle", "solid", "accent"]
-var LABEL_STYLES = ["number", "glyph", "none"]
+var LABEL_STYLES = ["number", "key", "both", "glyph", "none"]
 var SPEEDS = ["slow", "normal", "fast"]
 
 function clampInt(value, min, max, fallback) {
@@ -86,6 +87,7 @@ function resolveSettings(raw) {
     urgentHighlight: bool(s.urgentHighlight, d.urgentHighlight),
     middleClickClose: bool(s.middleClickClose, d.middleClickClose),
     tooltips: bool(s.tooltips, d.tooltips),
+    keyTooltips: bool(s.keyTooltips, d.keyTooltips),
     density: oneOf(s.density, DENSITIES, d.density),
     activeClick: oneOf(s.activeClick, ACTIVE_CLICKS, d.activeClick),
     settingsButton: oneOf(s.settingsButton, SETTINGS_BUTTONS, d.settingsButton),
@@ -146,11 +148,21 @@ function workspaceIds(occupied, activeIds, persistent, hideEmpty) {
   return ids
 }
 
-// Label text for a workspace pill.
-function workspaceLabel(id, focused, style) {
+// Label text for a workspace pill. `keys` is the workspace's entry from
+// workspaceKeyBinds; "key" shows its switch key, or the number without one.
+function workspaceLabel(id, focused, style, keys) {
   if (style === "none") return ""
   if (style === "glyph" && focused) return "󱓻"
+  if (style === "key" && keys && keys.switch) return keys.switch.key
   return id === 10 ? "0" : String(id)
+}
+
+// Small caption beside the number in the "both" style: the switch key,
+// unless it would only repeat the number (SUPER + 3 on workspace 3).
+function workspaceCaption(id, style, keys) {
+  if (style !== "both" || !keys || !keys.switch) return ""
+  var key = keys.switch.key
+  return key === workspaceLabel(id, false, "number") ? "" : key
 }
 
 // Stable key identifying "the same app" across windows.
@@ -567,6 +579,128 @@ function herdrTooltipLines(agents, maxTitle) {
   return lines
 }
 
+// ---- Key binds
+
+// Hyprland's modifier bits, in the order a shortcut is spelled out.
+var MOD_BITS = [
+  { bit: 64, name: "SUPER" }, { bit: 4, name: "CTRL" }, { bit: 8, name: "ALT" }, { bit: 1, name: "SHIFT" },
+  { bit: 2, name: "CAPS" }, { bit: 16, name: "MOD2" }, { bit: 32, name: "MOD3" }, { bit: 128, name: "MOD5" }
+]
+
+function modNames(modmask) {
+  var mask = Number(modmask) || 0
+  var out = []
+  for (var i = 0; i < MOD_BITS.length; i++) if (mask & MOD_BITS[i].bit) out.push(MOD_BITS[i].name)
+  return out
+}
+
+// Keysym names worth a friendlier spelling; matched case-insensitively.
+var KEY_NAMES = {
+  comma: ",", period: ".", slash: "/", minus: "-", equal: "=", grave: "`",
+  bracketleft: "[", bracketright: "]", semicolon: ";", apostrophe: "'", backslash: "\\",
+  space: "Space", "return": "Enter", tab: "Tab", escape: "Esc"
+}
+
+function keyDisplay(key) {
+  var value = String(key || "")
+  var lower = value.toLowerCase()
+  if (KEY_NAMES.hasOwnProperty(lower)) return KEY_NAMES[lower]
+  if (/^[a-z]$/i.test(value)) return value.toUpperCase()
+  return value
+}
+
+// What a bind does to a workspace: { kind: "switch" | "move", workspace, silent }
+// or null. Classic hyprland.conf binds name the dispatcher; Omarchy's Lua
+// binds all read "__lua", so only their description carries the meaning.
+var BIND_DISPATCHERS = {
+  workspace: { kind: "switch", silent: false },
+  movetoworkspace: { kind: "move", silent: false },
+  movetoworkspacesilent: { kind: "move", silent: true }
+}
+var BIND_DESCRIPTIONS = [
+  { re: /^switch to workspace (\d+)$/i, kind: "switch", silent: false },
+  { re: /^move window to workspace (\d+)$/i, kind: "move", silent: false },
+  { re: /^move window silently to workspace (\d+)$/i, kind: "move", silent: true }
+]
+
+function bindAction(bind) {
+  var dispatcher = String(bind.dispatcher || "")
+  if (BIND_DISPATCHERS.hasOwnProperty(dispatcher)) {
+    var arg = String(bind.arg || "").trim()
+    if (!/^\d+$/.test(arg) || Number(arg) <= 0) return null
+    var d = BIND_DISPATCHERS[dispatcher]
+    return { kind: d.kind, workspace: Number(arg), silent: d.silent }
+  }
+  var description = String(bind.description || "").trim()
+  for (var i = 0; i < BIND_DESCRIPTIONS.length; i++) {
+    var m = BIND_DESCRIPTIONS[i].re.exec(description)
+    if (m && Number(m[1]) > 0)
+      return { kind: BIND_DESCRIPTIONS[i].kind, workspace: Number(m[1]), silent: BIND_DESCRIPTIONS[i].silent }
+  }
+  return null
+}
+
+// The keys that reach each workspace, from the parsed `hyprctl binds -j`:
+//   { [workspaceId]: { switch: { mods: ["SUPER"], key: "J" } | null, move: ... } }
+// Lua binds can be listed twice, once without a key; that copy is skipped,
+// as are binds inside a submap and mouse binds. With several binds for one
+// workspace, the modifiers used most across that kind of bind win (so a
+// layout's main scheme beats leftovers), then the lowest mask, then the
+// first listed. A plain move beats a silent one.
+function workspaceKeyBinds(binds) {
+  var found = { "switch": [], move: [] }
+  var counts = { "switch": {}, move: {} }
+  var list = Array.isArray(binds) ? binds : []
+  for (var i = 0; i < list.length; i++) {
+    var b = list[i]
+    if (!b || typeof b !== "object" || b.mouse === true || (b.submap && b.submap !== "")) continue
+    var key = String(b.key || "")
+    var code = Number(b.keycode) || 0
+    if (key === "" && code === 0) continue
+    var action = bindAction(b)
+    if (!action) continue
+    var mask = Number(b.modmask) || 0
+    found[action.kind].push({ workspace: action.workspace, mask: mask, silent: action.silent, order: i,
+      bind: { mods: modNames(mask), key: key !== "" ? keyDisplay(key) : "code:" + code } })
+    counts[action.kind][mask] = (counts[action.kind][mask] || 0) + 1
+  }
+
+  var out = {}
+  for (var kind in found) {
+    var best = {}
+    var c = counts[kind]
+    for (var j = 0; j < found[kind].length; j++) {
+      var x = found[kind][j]
+      var cur = best[x.workspace]
+      var better = !cur
+        || (cur.silent && !x.silent)
+        || (cur.silent === x.silent && (c[x.mask] > c[cur.mask] || (c[x.mask] === c[cur.mask] && x.mask < cur.mask)))
+      if (better) best[x.workspace] = x
+    }
+    for (var ws in best) {
+      if (!out[ws]) out[ws] = { "switch": null, move: null }
+      out[ws][kind] = best[ws].bind
+    }
+  }
+  return out
+}
+
+// "SUPER + J", or "" without a bind.
+function keyHintText(bind) {
+  if (!bind || !bind.key) return ""
+  return (bind.mods || []).concat([bind.key]).join(" + ")
+}
+
+// Tooltip for a pill: "Workspace 3 · SUPER + L to switch · ALT + SHIFT + L
+// to move window here", leaving out what has no bind; "" when nothing does.
+function keyTooltip(id, keys) {
+  if (!keys || (!keys.switch && !keys.move)) return ""
+  var parts = ["Workspace " + id]
+  if (keys.switch) parts.push(keyHintText(keys.switch) + " to switch")
+  if (keys.move) parts.push(keyHintText(keys.move) + " to move window here")
+  return parts.join(" · ")
+}
+
 // Local path of a file:// URL, e.g. one from Qt.resolvedUrl.
 function localPath(url) {
   var value = String(url || "")
@@ -602,7 +736,9 @@ if (typeof module !== "undefined") {
     herdrAcks: herdrAcks, parseHerdrClients: parseHerdrClients, herdrStatesByPid: herdrStatesByPid,
     herdrTooltipLines: herdrTooltipLines, localPath: localPath,
     previewWidth: previewWidth, previewDimensions: previewDimensions, monitorArea: monitorArea, previewLayout: previewLayout, durationFor: durationFor,
-    workspaceIds: workspaceIds, workspaceLabel: workspaceLabel, appKey: appKey,
+    workspaceIds: workspaceIds, workspaceLabel: workspaceLabel, workspaceCaption: workspaceCaption, appKey: appKey,
+    modNames: modNames, keyDisplay: keyDisplay, workspaceKeyBinds: workspaceKeyBinds, keyHintText: keyHintText,
+    keyTooltip: keyTooltip,
     sortWindows: sortWindows, iconItems: iconItems, truncate: truncate,
     focusedLabel: focusedLabel, webAppHost: webAppHost, appIdCandidates: appIdCandidates, iconPathScore: iconPathScore,
     iconNameFromPath: iconNameFromPath, stepWorkspace: stepWorkspace, mergedEntry: mergedEntry,

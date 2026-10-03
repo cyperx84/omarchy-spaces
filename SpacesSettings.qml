@@ -167,6 +167,8 @@ Item {
             key: "labelStyle"
             options: [
               { value: "number", label: "Number" },
+              { value: "key", label: "Key" },
+              { value: "both", label: "Number + key" },
               { value: "glyph", label: "Glyph" },
               { value: "none", label: "None" }
             ]
@@ -256,6 +258,7 @@ Item {
 
           ToggleSetting { label: "Scroll to switch workspaces"; key: "scrollSwitch" }
           ToggleSetting { label: "Middle-click icon closes window"; key: "middleClickClose" }
+          ToggleSetting { label: "Shortcut tooltips"; description: "Hover a workspace to see the keys that reach it"; key: "keyTooltips" }
 
           // ---- Animation
           SectionTitle { text: "ANIMATION" }

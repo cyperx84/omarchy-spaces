@@ -36,6 +36,112 @@ test("workspaceLabel", () => {
   assert.strictEqual(M.workspaceLabel(3, false, "glyph"), "3")
 })
 
+test("workspaceLabel key styles", () => {
+  const keys = { switch: { mods: ["SUPER"], key: "J" }, move: null }
+  assert.strictEqual(M.workspaceLabel(1, false, "key", keys), "J")
+  assert.strictEqual(M.workspaceLabel(10, false, "key", null), "0")
+  assert.strictEqual(M.workspaceLabel(1, true, "both", keys), "1")
+  assert.strictEqual(M.workspaceCaption(1, "both", keys), "J")
+  assert.strictEqual(M.workspaceCaption(1, "key", keys), "")
+  assert.strictEqual(M.workspaceCaption(2, "both", null), "")
+  // SUPER + 3 on workspace 3 would only repeat the number.
+  assert.strictEqual(M.workspaceCaption(3, "both", { switch: { mods: ["SUPER"], key: "3" }, move: null }), "")
+  assert.strictEqual(M.workspaceCaption(10, "both", { switch: { mods: ["SUPER"], key: "0" }, move: null }), "")
+  assert.strictEqual(M.resolveSettings({}).labelStyle, "both")
+  assert.strictEqual(M.resolveSettings({ labelStyle: "key" }).labelStyle, "key")
+  assert.strictEqual(M.resolveSettings({ labelStyle: "keys" }).labelStyle, "both")
+  assert.strictEqual(M.resolveSettings({}).keyTooltips, true)
+  assert.strictEqual(M.resolveSettings({ keyTooltips: false }).keyTooltips, false)
+})
+
+test("modNames spells modifiers SUPER, CTRL, ALT, SHIFT", () => {
+  assert.deepStrictEqual(M.modNames(64), ["SUPER"])
+  assert.deepStrictEqual(M.modNames(9), ["ALT", "SHIFT"])
+  assert.deepStrictEqual(M.modNames(77), ["SUPER", "CTRL", "ALT", "SHIFT"])
+  assert.deepStrictEqual(M.modNames(0), [])
+  assert.deepStrictEqual(M.modNames(130), ["CAPS", "MOD5"])
+})
+
+test("keyHintText and keysym display", () => {
+  assert.strictEqual(M.keyHintText({ mods: ["SUPER"], key: "J" }), "SUPER + J")
+  assert.strictEqual(M.keyHintText({ mods: [], key: "F1" }), "F1")
+  assert.strictEqual(M.keyHintText(null), "")
+  const shown = ["j", "7", "comma", "period", "slash", "minus", "equal", "grave", "bracketleft", "bracketright",
+    "semicolon", "apostrophe", "backslash", "space", "Return", "Tab", "TAB", "Escape", "F5", "KP_End"].map(M.keyDisplay)
+  assert.deepStrictEqual(shown, ["J", "7", ",", ".", "/", "-", "=", "`", "[", "]", ";", "'", "\\", "Space", "Enter", "Tab", "Tab", "Esc", "F5", "KP_End"])
+  assert.strictEqual(M.keyDisplay("constructor"), "constructor")
+})
+
+test("workspaceKeyBinds reads Omarchy's Lua binds by description", () => {
+  const lua = [
+    // The keyless copies Lua leaves behind are skipped.
+    { modmask: 64, key: "", keycode: 0, dispatcher: "__lua", arg: "71", description: "Switch to workspace 1", submap: "" },
+    { modmask: 65, key: "", keycode: 0, dispatcher: "__lua", arg: "73", description: "Move window to workspace 1", submap: "" },
+    { modmask: 64, key: "J", keycode: 0, dispatcher: "__lua", arg: "68", description: "Switch to workspace 1", submap: "" },
+    { modmask: 9, key: "J", keycode: 0, dispatcher: "__lua", arg: "76", description: "Move window to workspace 1", submap: "" },
+    { modmask: 73, key: "J", keycode: 0, dispatcher: "__lua", arg: "77", description: "Move window silently to workspace 1", submap: "" },
+    { modmask: 64, key: "K", keycode: 0, dispatcher: "__lua", arg: "84", description: "switch to WORKSPACE 2", submap: "" },
+    { modmask: 73, key: "K", keycode: 0, dispatcher: "__lua", arg: "85", description: "Move window silently to workspace 2", submap: "" },
+    { modmask: 64, key: "TAB", keycode: 0, dispatcher: "__lua", arg: "135", description: "Next workspace", submap: "" },
+    { modmask: 64, key: "R", keycode: 0, dispatcher: "__lua", arg: "200", description: "Switch to workspace 4", submap: "resize" }
+  ]
+  assert.deepStrictEqual(M.workspaceKeyBinds(lua), {
+    1: { switch: { mods: ["SUPER"], key: "J" }, move: { mods: ["ALT", "SHIFT"], key: "J" } },
+    // A silent move still moves the window there when it is all there is.
+    2: { switch: { mods: ["SUPER"], key: "K" }, move: { mods: ["SUPER", "ALT", "SHIFT"], key: "K" } }
+  })
+})
+
+test("workspaceKeyBinds reads classic dispatcher binds", () => {
+  const classic = [
+    { modmask: 64, key: "3", keycode: 0, dispatcher: "workspace", arg: "3", description: "" },
+    { modmask: 65, key: "3", keycode: 0, dispatcher: "movetoworkspace", arg: "3", description: "" },
+    { modmask: 64, key: "comma", keycode: 0, dispatcher: "workspace", arg: "4", description: "" },
+    { modmask: 72, key: "", keycode: 13, dispatcher: "movetoworkspacesilent", arg: "4", description: "" },
+    { modmask: 64, key: "5", keycode: 0, dispatcher: "workspace", arg: "e+1", description: "" },
+    { modmask: 64, key: "6", keycode: 0, dispatcher: "workspace", arg: "name:web", description: "" },
+    { modmask: 64, key: "mouse:272", keycode: 0, dispatcher: "workspace", arg: "7", mouse: true, description: "" }
+  ]
+  assert.deepStrictEqual(M.workspaceKeyBinds(classic), {
+    3: { switch: { mods: ["SUPER"], key: "3" }, move: { mods: ["SUPER", "SHIFT"], key: "3" } },
+    4: { switch: { mods: ["SUPER"], key: "," }, move: { mods: ["SUPER", "ALT"], key: "code:13" } }
+  })
+  assert.deepStrictEqual(M.workspaceKeyBinds(null), {})
+  assert.deepStrictEqual(M.workspaceKeyBinds([null, 3, {}]), {})
+})
+
+test("workspaceKeyBinds prefers the most common modifiers, then the lowest, then the first", () => {
+  const binds = [
+    // Upstream's SUPER + digit binds next to the user's own CTRL + letter scheme.
+    { modmask: 64, key: "1", dispatcher: "workspace", arg: "1" },
+    { modmask: 4, key: "A", dispatcher: "workspace", arg: "1" },
+    { modmask: 4, key: "S", dispatcher: "workspace", arg: "2" },
+    { modmask: 4, key: "D", dispatcher: "workspace", arg: "3" },
+    { modmask: 64, key: "9", dispatcher: "workspace", arg: "9" },
+    // Tied counts: the lower mask wins, whatever the order.
+    { modmask: 72, key: "X", dispatcher: "movetoworkspace", arg: "1" },
+    { modmask: 9, key: "Y", dispatcher: "movetoworkspace", arg: "1" },
+    // Same mask twice: the first listed wins.
+    { modmask: 4, key: "Q", dispatcher: "workspace", arg: "8" },
+    { modmask: 4, key: "W", dispatcher: "workspace", arg: "8" }
+  ]
+  const out = M.workspaceKeyBinds(binds)
+  assert.deepStrictEqual(out[1].switch, { mods: ["CTRL"], key: "A" })
+  assert.deepStrictEqual(out[9].switch, { mods: ["SUPER"], key: "9" })
+  assert.deepStrictEqual(out[1].move, { mods: ["ALT", "SHIFT"], key: "Y" })
+  assert.deepStrictEqual(out[8].switch, { mods: ["CTRL"], key: "Q" })
+  assert.strictEqual(out[2].move, null)
+})
+
+test("keyTooltip names the keys for a workspace", () => {
+  const sw = { mods: ["SUPER"], key: "L" }
+  const mv = { mods: ["ALT", "SHIFT"], key: "L" }
+  assert.strictEqual(M.keyTooltip(3, { switch: sw, move: mv }), "Workspace 3 · SUPER + L to switch · ALT + SHIFT + L to move window here")
+  assert.strictEqual(M.keyTooltip(3, { switch: sw, move: null }), "Workspace 3 · SUPER + L to switch")
+  assert.strictEqual(M.keyTooltip(3, { switch: null, move: mv }), "Workspace 3 · ALT + SHIFT + L to move window here")
+  assert.strictEqual(M.keyTooltip(3, null), "")
+})
+
 test("sortWindows orders by x then y, unknown last", () => {
   const w = [{ id: "a", at: [500, 0] }, { id: "b" }, { id: "c", at: [10, 300] }, { id: "d", at: [10, 5] }]
   assert.deepStrictEqual(M.sortWindows(w).map(x => x.id), ["d", "c", "a", "b"])

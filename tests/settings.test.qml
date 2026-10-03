@@ -88,6 +88,17 @@ Window {
       mouseClick(find(form, "key", "agentStatus"))
       equal(form.cfg.agentStatus, false)
       equal(herdr.visible, false)
+      mouseClick(find(form, "text", "Appearance"))
+      wait(50)
+      equal(form.cfg.labelStyle, "both")
+      mouseClick(find(form, "text", "Key"))
+      equal(form.cfg.labelStyle, "key")
+      mouseClick(find(form, "text", "Behaviour"))
+      wait(50)
+      var keyTips = find(form, "key", "keyTooltips")
+      equal(keyTips.visible, true)
+      mouseClick(keyTips)
+      equal(form.cfg.keyTooltips, false)
       form.cfg = Model.resolveSettings({focusedTitle: true})
       for (var section of ["icons", "windows", "appearance", "workspaces", "previews", "behavior"]) {
         form.section = section

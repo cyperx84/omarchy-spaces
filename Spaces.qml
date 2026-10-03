@@ -500,8 +500,11 @@ Panel {
     if (next !== root.currentWorkspaceId) focusWorkspace(next)
   }
 
-  function showTip(target, text) {
-    if (root.bar && root.cfg.tooltips && text) root.bar.showTooltip(target, text)
+  // `wanted` overrides the window-title tooltip setting, for tips that have
+  // their own (the pills' shortcut tooltips).
+  function showTip(target, text, wanted) {
+    var on = wanted === undefined ? root.cfg.tooltips : wanted
+    if (root.bar && on && text) root.bar.showTooltip(target, text)
   }
 
   function hideTip(target) {
@@ -528,6 +531,9 @@ Panel {
         root.setUrgent(event.data, false)
         refreshDebounce.restart()
         break
+      case "configreloaded":
+        bindsDebounce.restart()
+        break
       case "openwindow":
       case "movewindow":
       case "movewindowv2":
@@ -553,6 +559,40 @@ Panel {
     id: revisionBump
     interval: 80
     onTriggered: root.revision++
+  }
+
+  // ------------------------------------------------------------ key binds
+
+  // The keys that reach each workspace, read from the live binds so they
+  // follow whatever the user has bound, not Omarchy's defaults:
+  //   { [workspaceId]: { switch: { mods, key } | null, move: { mods, key } | null } }
+  property var keyBinds: ({})
+  property var bindsLines: []
+
+  function applyBinds(text) {
+    var parsed
+    try { parsed = JSON.parse(text) } catch (e) { return }
+    root.keyBinds = Model.workspaceKeyBinds(parsed)
+  }
+
+  Process {
+    id: bindsScan
+    command: ["hyprctl", "binds", "-j"]
+    stdout: SplitParser { onRead: function(line) { root.bindsLines.push(line) } }
+    onStarted: root.bindsLines = []
+    onExited: function(exitCode) {
+      // A failed scan keeps the binds already known.
+      if (exitCode === 0) root.applyBinds(root.bindsLines.join("\n"))
+      root.bindsLines = []
+    }
+  }
+
+  // A config reload can rebind anything; it also fires several times in a
+  // row while the config is being saved.
+  Timer {
+    id: bindsDebounce
+    interval: 500
+    onTriggered: if (!bindsScan.running) bindsScan.running = true
   }
 
   // ------------------------------------------------------------ app icons
@@ -654,6 +694,7 @@ Panel {
     // Touching the list starts Quickshell's desktop-entry scan.
     DesktopEntries.applications.values
     iconScan.running = true
+    bindsScan.running = true
     Hyprland.refreshToplevels()
     root.syncHerdr()
   }
@@ -799,6 +840,8 @@ Panel {
       readonly property bool shown: root.opened || root.cfg.settingsButton === "always"
         || (root.cfg.settingsButton === "hover" && root.widgetHovered)
       readonly property real size: Math.max(root.pillThickness, Style.space(28))
+      // The bar only shows a tooltip while its target says it is hovered.
+      readonly property bool tooltipHovered: gearMouse.containsMouse
       visible: root.cfg.settingsButton !== "never"
       implicitWidth: root.vertical ? root.pillThickness : size
       implicitHeight: root.vertical ? size : root.pillThickness
@@ -871,7 +914,17 @@ Panel {
         }
         readonly property var itemKeys: iconData.items.map(function(item) { return item.key })
         readonly property color textColor: active ? root.activeText() : root.fg
-        readonly property string label: Model.workspaceLabel(workspaceId, active, root.cfg.labelStyle)
+        readonly property var keys: root.keyBinds[workspaceId] || null
+        readonly property string label: Model.workspaceLabel(workspaceId, active, root.cfg.labelStyle, keys)
+        readonly property string caption: Model.workspaceCaption(workspaceId, root.cfg.labelStyle, keys)
+
+        // Shortcut tooltip: on the pill itself, not over its icons (they have
+        // their own), and never on top of this pill's preview card.
+        property Item hoveredIcon: null
+        readonly property string keyTip: root.cfg.keyTooltips ? Model.keyTooltip(workspaceId, keys) : ""
+        readonly property bool tooltipHovered: hovered && hoveredIcon === null && keyTip !== ""
+          && !(root.previewOpen && root.previewWorkspaceId === workspaceId)
+        onTooltipHoveredChanged: tooltipHovered ? root.showTip(pill, keyTip, true) : root.hideTip(pill)
         readonly property real pad: Style.space(label === "" ? 3 : root.metrics.pad)
 
         // Appear animation lives on the delegate: positioner add transitions
@@ -943,16 +996,48 @@ Panel {
           verticalItemAlignment: Grid.AlignVCenter
           spacing: pill.label !== "" && iconClip.shownExtent > 0 ? Style.space(5) : 0
 
-          Text {
+          // The label, with the switch key as a small caption in the
+          // "both" style: after the number across, under it when stacked.
+          Item {
+            id: labelBox
+            readonly property bool captioned: pill.caption !== ""
+            readonly property real captionGap: Style.space(2)
             visible: pill.label !== ""
-            text: pill.label
-            color: pill.textColor
             opacity: pill.occupied || pill.active ? 1 : 0.5
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            font.bold: pill.active
-            Behavior on color { enabled: root.fastDur > 0; ColorAnimation { duration: root.fastDur } }
+            implicitWidth: root.vertical
+              ? Math.max(labelText.implicitWidth, captioned ? captionText.implicitWidth : 0)
+              : labelText.implicitWidth + (captioned ? captionGap + captionText.implicitWidth : 0)
+            implicitHeight: root.vertical && captioned
+              ? labelText.implicitHeight + captionText.implicitHeight - captionGap
+              : labelText.implicitHeight
             Behavior on opacity { enabled: root.fastDur > 0; NumberAnimation { duration: root.fastDur } }
+
+            Text {
+              id: labelText
+              x: root.vertical ? Math.round((labelBox.width - implicitWidth) / 2) : 0
+              text: pill.label
+              textFormat: Text.PlainText
+              color: pill.textColor
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: pill.active
+              Behavior on color { enabled: root.fastDur > 0; ColorAnimation { duration: root.fastDur } }
+            }
+
+            Text {
+              id: captionText
+              visible: labelBox.captioned
+              x: root.vertical ? Math.round((labelBox.width - implicitWidth) / 2) : labelText.x + labelText.implicitWidth + labelBox.captionGap
+              y: root.vertical ? labelText.implicitHeight - labelBox.captionGap : labelText.baselineOffset - baselineOffset
+              text: pill.caption
+              textFormat: Text.PlainText
+              color: pill.textColor
+              opacity: 0.7
+              font.family: root.fontFamily
+              font.pixelSize: Math.max(7, Math.round(Style.font.body * 0.7))
+              font.bold: pill.active
+              Behavior on color { enabled: root.fastDur > 0; ColorAnimation { duration: root.fastDur } }
+            }
           }
 
           // The icon strip is clipped and its extent animates, so icons slide
@@ -995,6 +1080,11 @@ Panel {
                   readonly property string titleText: root.cfg.focusedTitle && focusedHere && !root.vertical
                     ? Model.focusedLabel(item, info.name, root.cfg.titleLength) : ""
                   readonly property bool hovered: iconMouse.containsMouse
+                  readonly property bool tooltipHovered: hovered
+                  onHoveredChanged: {
+                    if (hovered) pill.hoveredIcon = appIcon
+                    else if (pill.hoveredIcon === appIcon) pill.hoveredIcon = null
+                  }
                   readonly property string agentState: item ? root.agentStateFor(item.addresses) : ""
                   readonly property bool herdrHost: !!item && root.herdrAgents.length > 0 && root.herdrHosted(item.addresses)
                   readonly property int herdrLive: herdrHost ? root.herdrState.live : 0

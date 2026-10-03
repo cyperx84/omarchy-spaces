@@ -70,10 +70,12 @@
         "label": "Workspace label",
         "options": [
           "number",
+          "key",
+          "both",
           "glyph",
           "none"
         ],
-        "default": "number"
+        "default": "both"
       },
       {
         "key": "iconSize",
@@ -186,6 +188,12 @@
         "key": "tooltips",
         "type": "bool",
         "label": "Tooltips",
+        "default": true
+      },
+      {
+        "key": "keyTooltips",
+        "type": "bool",
+        "label": "Shortcut tooltips",
         "default": true
       },
       {
