@@ -272,6 +272,92 @@ test("parsePids drops junk and init", () => {
   assert.deepStrictEqual(M.parsePids("12,abc,1,,34"), [12, 34])
 })
 
+test("herdr settings validate", () => {
+  assert.strictEqual(M.resolveSettings({}).herdrAgents, true)
+  assert.strictEqual(M.resolveSettings({ herdrAgents: false }).herdrAgents, false)
+  assert.strictEqual(M.resolveSettings({ herdrAgents: "no" }).herdrAgents, true)
+})
+
+test("herdrBarState maps Herdr statuses to badges", () => {
+  assert.strictEqual(M.herdrBarState("working"), "working")
+  assert.strictEqual(M.herdrBarState("blocked"), "waiting")
+  assert.strictEqual(M.herdrBarState("done"), "done")
+  assert.strictEqual(M.herdrBarState("idle"), "")
+  assert.strictEqual(M.herdrBarState("unknown"), "")
+  assert.strictEqual(M.herdrBarState("toString"), "")
+  assert.strictEqual(M.herdrBarState(undefined), "")
+})
+
+test("parseHerdrFeed keeps agents and rejects other lines", () => {
+  const line = JSON.stringify({ type: "herdr", focused_workspace_id: "w1", agents: [
+    { pane_id: "w1:p1", workspace_id: "w1", workspace_label: "Code", workspace_number: 3, tab_id: "w1:t1",
+      agent: "claude", status: "working", title: "fix bar", focused: true, session: "abc" },
+    { workspace_id: "w2", status: "done" },
+    null
+  ] })
+  assert.deepStrictEqual(M.parseHerdrFeed(line), [{ pane_id: "w1:p1", workspace_id: "w1", workspace_label: "Code",
+    workspace_number: 3, tab_id: "w1:t1", agent: "claude", status: "working", title: "fix bar", focused: true, session: "abc" }])
+  assert.deepStrictEqual(M.parseHerdrFeed(JSON.stringify({ type: "herdr", agents: [{ pane_id: 7, agent: null }] }))[0],
+    { pane_id: "7", workspace_id: "", workspace_label: "", workspace_number: 0, tab_id: "", agent: "",
+      status: "", title: "", focused: false, session: "" })
+  assert.strictEqual(M.parseHerdrFeed("not json"), null)
+  assert.strictEqual(M.parseHerdrFeed(JSON.stringify({ type: "other", agents: [] })), null)
+  assert.strictEqual(M.parseHerdrFeed(JSON.stringify({ type: "herdr" })), null)
+})
+
+test("herdrSummary ranks states and counts live agents", () => {
+  const agents = [
+    { pane_id: "a", status: "working" },
+    { pane_id: "b", status: "done" },
+    { pane_id: "c", status: "idle" },
+    { pane_id: "d", status: "working" }
+  ]
+  assert.deepStrictEqual(M.herdrSummary(agents, {}), { state: "working", live: 2 })
+  assert.deepStrictEqual(M.herdrSummary(agents.concat([{ pane_id: "e", status: "blocked" }]), {}), { state: "waiting", live: 3 })
+  assert.deepStrictEqual(M.herdrSummary([{ pane_id: "b", status: "done" }], {}), { state: "done", live: 0 })
+  assert.deepStrictEqual(M.herdrSummary([{ pane_id: "b", status: "done" }], { b: true }), { state: "", live: 0 })
+  assert.deepStrictEqual(M.herdrSummary([], {}), { state: "", live: 0 })
+})
+
+test("herdrAcks keeps seen finishes until they leave done", () => {
+  const agents = [{ pane_id: "a", status: "done" }, { pane_id: "b", status: "done" }, { pane_id: "c", status: "working" }]
+  assert.deepStrictEqual(M.herdrAcks(agents, {}, true), { a: true, b: true })
+  assert.deepStrictEqual(M.herdrAcks(agents, { a: true, c: true }, false), { a: true })
+  // Working again drops the ack, so the next finish shows its check mark.
+  const acked = M.herdrAcks([{ pane_id: "a", status: "working" }], { a: true }, false)
+  assert.deepStrictEqual(M.herdrAcks([{ pane_id: "a", status: "done" }], acked, false), {})
+})
+
+test("parseHerdrClients finds the nearest window hosting each client", () => {
+  const text = "500,400,1\n\n600,700,400\njunk\n800,900\n500,400"
+  assert.deepStrictEqual(M.parseHerdrClients(text, { 400: true, 700: true }), [400, 700])
+  assert.deepStrictEqual(M.parseHerdrClients("", { 400: true }), [])
+})
+
+test("herdrStatesByPid badges every Herdr window with the combined state", () => {
+  assert.deepStrictEqual(M.herdrStatesByPid([10, 20], { state: "waiting", live: 1 }), { 10: "waiting", 20: "waiting" })
+  assert.deepStrictEqual(M.herdrStatesByPid([10], { state: "", live: 0 }), {})
+})
+
+test("mergeAgentStates keeps the most urgent state per window", () => {
+  assert.deepStrictEqual(M.mergeAgentStates({ 1: "done", 2: "waiting", 4: "idle" }, { 1: "working", 2: "working", 3: "done" }),
+    { 1: "working", 2: "waiting", 3: "done" })
+  assert.deepStrictEqual(M.mergeAgentStates(undefined, { 5: "done" }), { 5: "done" })
+})
+
+test("herdrTooltipLines lists status, workspace and title", () => {
+  assert.deepStrictEqual(M.herdrTooltipLines([
+    { status: "working", workspace_label: "Code", title: "omarchy-spaces custom version" },
+    { status: "blocked", workspace_label: "", title: "a very long title indeed" },
+    { status: "", workspace_label: "Notes", title: "" }
+  ], 10), ["working · Code · omarchy-s…", "blocked · a very lo…", "unknown · Notes"])
+})
+
+test("localPath decodes file URLs", () => {
+  assert.strictEqual(M.localPath("file:///home/me/my%20plugins/hooks/herdr-feed"), "/home/me/my plugins/hooks/herdr-feed")
+  assert.strictEqual(M.localPath("/already/a/path"), "/already/a/path")
+})
+
 // Apps and web pages set their own window titles. Qt guesses rich text by
 // default, so a title with markup could load remote images in the shell.
 test("window titles render as plain text", () => {

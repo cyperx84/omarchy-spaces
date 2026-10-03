@@ -32,7 +32,8 @@ var DEFAULTS = {
   previews: true,             // live preview of a workspace on hover
   previewSize: "medium",      // "small" | "medium" | "large"
   previewLive: true,          // keep previews streaming; false = one frame
-  agentStatus: true           // badges for coding agents running in terminals
+  agentStatus: true,          // badges for coding agents running in terminals
+  herdrAgents: true           // agent status from Herdr for terminals hosting it
 }
 
 var SHOW_APPS = ["all", "active", "hover", "hoverOnly"]
@@ -91,7 +92,8 @@ function resolveSettings(raw) {
     previews: bool(s.previews, d.previews),
     previewSize: oneOf(s.previewSize, PREVIEW_SIZES, d.previewSize),
     previewLive: bool(s.previewLive, d.previewLive),
-    agentStatus: bool(s.agentStatus, d.agentStatus)
+    agentStatus: bool(s.agentStatus, d.agentStatus),
+    herdrAgents: bool(s.herdrAgents, d.herdrAgents)
   }
 }
 
@@ -442,6 +444,136 @@ function pruneDeadAgents(agents, alivePids) {
   return pruned ? out : agents
 }
 
+// Merges two { pid: state } maps; the more urgent state wins.
+function mergeAgentStates(a, b) {
+  var out = {}
+  var maps = [a || {}, b || {}]
+  for (var m = 0; m < maps.length; m++) {
+    for (var pid in maps[m]) {
+      var state = maps[m][pid]
+      if (!AGENT_RANK[state]) continue
+      if (!out[pid] || AGENT_RANK[out[pid]] < AGENT_RANK[state]) out[pid] = state
+    }
+  }
+  return out
+}
+
+// ---- Herdr
+
+// Herdr, the terminal multiplexer, tracks every agent in its panes itself.
+// hooks/herdr-feed relays its snapshots; these helpers turn them into badges.
+// Its agent_status is idle | working | blocked | done | unknown, and only
+// three of those are worth a badge.
+var HERDR_STATES = { working: "working", blocked: "waiting", done: "done" }
+
+function herdrBarState(status) {
+  var value = String(status || "")
+  return HERDR_STATES.hasOwnProperty(value) ? HERDR_STATES[value] : ""
+}
+
+// One feed line -> the agent list, or null when the line is not a snapshot.
+// Every field is coerced: the text comes from other processes and is only
+// ever rendered as plain text.
+function parseHerdrFeed(line) {
+  var data
+  try { data = JSON.parse(String(line || "")) } catch (e) { return null }
+  if (!data || data.type !== "herdr" || !Array.isArray(data.agents)) return null
+  var out = []
+  for (var i = 0; i < data.agents.length; i++) {
+    var a = data.agents[i]
+    if (!a || typeof a !== "object" || !a.pane_id) continue
+    out.push({
+      pane_id: String(a.pane_id),
+      workspace_id: String(a.workspace_id || ""),
+      workspace_label: String(a.workspace_label || ""),
+      workspace_number: Number(a.workspace_number) || 0,
+      tab_id: String(a.tab_id || ""),
+      agent: String(a.agent || ""),
+      status: String(a.status || ""),
+      title: String(a.title || ""),
+      focused: a.focused === true,
+      session: String(a.session || "")
+    })
+  }
+  return out
+}
+
+// Rolls every Herdr agent up into one badge: the most urgent state plus how
+// many agents are live (working or blocked). Finished agents the user has
+// already seen (`acked`: { pane_id: true }) no longer count.
+function herdrSummary(agents, acked) {
+  var best = ""
+  var live = 0
+  for (var i = 0; i < (agents || []).length; i++) {
+    var state = herdrBarState(agents[i].status)
+    if (!state || (state === "done" && acked && acked[agents[i].pane_id])) continue
+    if (AGENT_LIVE_STATES[state]) live++
+    if (!best || AGENT_RANK[state] > AGENT_RANK[best]) best = state
+  }
+  return { state: best, live: live }
+}
+
+// Which finished panes have been seen. A pane stays acknowledged until it
+// leaves "done", so its next finish shows a check mark again. While a Herdr
+// window is being looked at (`viewing`), every finished pane is seen.
+function herdrAcks(agents, acked, viewing) {
+  var out = {}
+  for (var i = 0; i < (agents || []).length; i++) {
+    var id = agents[i].pane_id
+    if (herdrBarState(agents[i].status) !== "done") continue
+    if (viewing || (acked && acked[id])) out[id] = true
+  }
+  return out
+}
+
+// The Herdr client probe prints one line per client: its ancestor PIDs,
+// nearest first, comma separated. The nearest ancestor that is a window
+// (`windowPids`: { pid: true }) hosts that client. Returns sorted host PIDs.
+function parseHerdrClients(text, windowPids) {
+  var out = []
+  var lines = String(text || "").split("\n")
+  for (var i = 0; i < lines.length; i++) {
+    var pids = parsePids(lines[i])
+    for (var j = 0; j < pids.length; j++) {
+      if (!windowPids[pids[j]]) continue
+      if (out.indexOf(pids[j]) === -1) out.push(pids[j])
+      break
+    }
+  }
+  out.sort(function(a, b) { return a - b })
+  return out
+}
+
+// Herdr cannot say which client shows which workspace, so every window
+// hosting a client wears the combined state. Returns { pid: state }.
+function herdrStatesByPid(hostPids, summary) {
+  var out = {}
+  if (!summary || !summary.state) return out
+  for (var i = 0; i < hostPids.length; i++) out[hostPids[i]] = summary.state
+  return out
+}
+
+// Tooltip lines under a Herdr window's title, one per agent:
+// "working · Code · omarchy-spaces custom version".
+function herdrTooltipLines(agents, maxTitle) {
+  var lines = []
+  for (var i = 0; i < (agents || []).length; i++) {
+    var a = agents[i]
+    var parts = [a.status || "unknown"]
+    if (a.workspace_label) parts.push(a.workspace_label)
+    if (a.title) parts.push(truncate(a.title, maxTitle))
+    lines.push(parts.join(" · "))
+  }
+  return lines
+}
+
+// Local path of a file:// URL, e.g. one from Qt.resolvedUrl.
+function localPath(url) {
+  var value = String(url || "")
+  if (value.indexOf("file://") !== 0) return value
+  try { return decodeURIComponent(value.slice(7)) } catch (e) { return value.slice(7) }
+}
+
 // Next workspace id when scrolling; wraps around.
 function stepWorkspace(ids, current, delta) {
   if (!ids.length) return current
@@ -465,7 +597,10 @@ if (typeof module !== "undefined") {
     DEFAULTS: DEFAULTS, resolveSettings: resolveSettings, showsApps: showsApps,
     densityMetrics: densityMetrics, normalizeAddress: normalizeAddress,
     agentStates: agentStates, parsePids: parsePids, normalizeAgentState: normalizeAgentState,
-    agentProcessIds: agentProcessIds, pruneDeadAgents: pruneDeadAgents,
+    agentProcessIds: agentProcessIds, pruneDeadAgents: pruneDeadAgents, mergeAgentStates: mergeAgentStates,
+    herdrBarState: herdrBarState, parseHerdrFeed: parseHerdrFeed, herdrSummary: herdrSummary,
+    herdrAcks: herdrAcks, parseHerdrClients: parseHerdrClients, herdrStatesByPid: herdrStatesByPid,
+    herdrTooltipLines: herdrTooltipLines, localPath: localPath,
     previewWidth: previewWidth, previewDimensions: previewDimensions, monitorArea: monitorArea, previewLayout: previewLayout, durationFor: durationFor,
     workspaceIds: workspaceIds, workspaceLabel: workspaceLabel, appKey: appKey,
     sortWindows: sortWindows, iconItems: iconItems, truncate: truncate,

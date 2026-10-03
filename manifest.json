@@ -238,6 +238,12 @@
         "type": "bool",
         "label": "Agent status",
         "default": true
+      },
+      {
+        "key": "herdrAgents",
+        "type": "bool",
+        "label": "Herdr agents",
+        "default": true
       }
     ]
   }

@@ -131,11 +131,17 @@ Panel {
     return map
   }
 
-  readonly property var agentByPid: {
-    if (!root.cfg.agentStatus) return ({})
+  // { pid: true } for every window that reports one.
+  readonly property var windowPids: {
     var pids = ({})
     for (var address in root.pidByAddress) if (root.pidByAddress[address]) pids[root.pidByAddress[address]] = true
-    return Model.agentStates(root.agents, pids)
+    return pids
+  }
+
+  // Reporter states and Herdr states share one map; the more urgent wins.
+  readonly property var agentByPid: {
+    if (!root.cfg.agentStatus) return ({})
+    return Model.mergeAgentStates(Model.agentStates(root.agents, root.windowPids), root.herdrByPid)
   }
 
   function agentStateFor(addresses) {
@@ -246,7 +252,10 @@ Panel {
 
   Connections {
     target: Hyprland
-    function onActiveToplevelChanged() { Qt.callLater(root.acknowledgeAgents) }
+    function onActiveToplevelChanged() {
+      Qt.callLater(root.acknowledgeAgents)
+      Qt.callLater(root.acknowledgeHerdr)
+    }
   }
 
   Process {
@@ -261,6 +270,140 @@ Panel {
     repeat: true
     running: true
     onTriggered: root.startAgentProbe()
+  }
+
+  // ------------------------------------------------------------ herdr
+
+  // Herdr runs agents in its own server process, so their process trees never
+  // pass through a terminal window and no reporter could find one. Instead,
+  // hooks/herdr-feed relays Herdr's own agent status, and a window counts as
+  // a Herdr window when a Herdr client process runs under it. Herdr cannot
+  // say which client shows which workspace, so with several Herdr windows
+  // every one of them wears the combined state.
+  readonly property bool herdrWanted: root.cfg.agentStatus && root.cfg.herdrAgents
+  readonly property string herdrFeedPath: Model.localPath(Qt.resolvedUrl("hooks/herdr-feed"))
+  property var herdrFeedAgents: []
+  property string herdrClientText: ""
+  property var herdrClientLines: []
+  // { pane_id: true } for finished panes already seen.
+  property var herdrAcked: ({})
+
+  // [{ pane_id, workspace_id, workspace_label, workspace_number, tab_id,
+  //    agent, status, title, focused, session }], as hooks/herdr-feed sends it.
+  readonly property var herdrAgents: root.herdrWanted ? root.herdrFeedAgents : []
+  // PIDs of the windows hosting a Herdr client, sorted.
+  readonly property var herdrWindowPids: root.herdrWanted ? Model.parseHerdrClients(root.herdrClientText, root.windowPids) : []
+  readonly property var herdrState: Model.herdrSummary(root.herdrAgents, root.herdrAcked)
+  readonly property var herdrByPid: Model.herdrStatesByPid(root.herdrWindowPids, root.herdrState)
+
+  // Window PIDs as one comparable value, so a new or closed window can
+  // trigger a fresh client probe.
+  readonly property string windowPidKey: Object.keys(root.windowPids).sort().join(",")
+  onWindowPidKeyChanged: if (root.herdrWanted) herdrProbeDebounce.restart()
+  onHerdrWantedChanged: root.syncHerdr()
+
+  function isHerdrWindow(address) {
+    return root.herdrWindowPids.indexOf(root.pidByAddress[address]) !== -1
+  }
+
+  function herdrHosted(addresses) {
+    for (var i = 0; i < addresses.length; i++) if (root.isHerdrWindow(addresses[i])) return true
+    return false
+  }
+
+  function syncHerdr() {
+    if (root.herdrWanted) {
+      if (!herdrFeed.running) herdrFeed.running = true
+      root.startHerdrProbe()
+    } else {
+      herdrRetry.stop()
+      herdrFeed.running = false
+      root.herdrFeedAgents = []
+      root.herdrClientText = ""
+      root.herdrAcked = ({})
+    }
+  }
+
+  function applyHerdrFeed(line) {
+    var agents = Model.parseHerdrFeed(line)
+    if (!agents) return
+    // Finishing in the window you are looking at needs no check mark.
+    root.herdrAcked = Model.herdrAcks(agents, root.herdrAcked, root.viewingHerdr())
+    root.herdrFeedAgents = agents
+  }
+
+  function viewingHerdr() {
+    var pid = root.activeWindowPid()
+    return pid > 0 && root.herdrWindowPids.indexOf(pid) !== -1
+  }
+
+  // Seeing a Herdr window clears the check marks of its finished agents.
+  function acknowledgeHerdr() {
+    if (root.viewingHerdr()) root.herdrAcked = Model.herdrAcks(root.herdrAgents, root.herdrAcked, true)
+  }
+
+  function startHerdrProbe() {
+    if (!root.herdrWanted || herdrClientProbe.running) return
+    herdrClientProbe.running = true
+  }
+
+  Process {
+    id: herdrFeed
+    // bash first, so a machine without python3 stays as quiet as one
+    // without Herdr: the feed simply exits and is retried.
+    command: ["bash", "-c", 'command -v python3 >/dev/null 2>&1 || exit 0; exec python3 "$1"', "spaces-herdr-feed", root.herdrFeedPath]
+    stdout: SplitParser { onRead: function(line) { root.applyHerdrFeed(line) } }
+    onExited: {
+      // Herdr is gone (or never was): no stale badges, and try again later.
+      root.herdrFeedAgents = []
+      if (root.herdrWanted) herdrRetry.restart()
+    }
+  }
+
+  Timer {
+    id: herdrRetry
+    interval: 5000
+    onTriggered: if (root.herdrWanted && !herdrFeed.running) herdrFeed.running = true
+  }
+
+  // Prints, for every Herdr client (not the server), its ancestor PIDs
+  // nearest first. The nearest one that is a window hosts the client.
+  Process {
+    id: herdrClientProbe
+    command: ["bash", "-c", [
+      'command -v pgrep >/dev/null 2>&1 || exit 0;',
+      'for pid in $(pgrep -x herdr); do',
+      'mapfile -d "" -t args 2>/dev/null < "/proc/$pid/cmdline" || continue;',
+      '[[ ${args[1]:-} == server ]] && continue;',
+      'chain=""; p=$pid;',
+      'for _ in {1..32}; do',
+      'stat=$(cat "/proc/$p/stat" 2>/dev/null) || break;',
+      'rest=${stat##*) }; set -- $rest; p=$2;',
+      '(( p > 1 )) || break;',
+      'chain+=${chain:+,}$p;',
+      'done;',
+      '[[ -n $chain ]] && echo "$chain";',
+      'done'
+    ].join("\n")]
+    stdout: SplitParser { onRead: function(line) { root.herdrClientLines.push(line) } }
+    onStarted: root.herdrClientLines = []
+    onExited: {
+      if (root.herdrWanted) root.herdrClientText = root.herdrClientLines.join("\n")
+      root.herdrClientLines = []
+    }
+  }
+
+  Timer {
+    id: herdrProbeDebounce
+    interval: 400
+    onTriggered: root.startHerdrProbe()
+  }
+
+  Timer {
+    interval: 30000
+    repeat: true
+    running: root.herdrWanted
+    onTriggered: root.startHerdrProbe()
   }
 
   function appIdOf(toplevel) {
@@ -512,6 +655,7 @@ Panel {
     DesktopEntries.applications.values
     iconScan.running = true
     Hyprland.refreshToplevels()
+    root.syncHerdr()
   }
 
   // ------------------------------------------------------------ previews
@@ -852,6 +996,8 @@ Panel {
                     ? Model.focusedLabel(item, info.name, root.cfg.titleLength) : ""
                   readonly property bool hovered: iconMouse.containsMouse
                   readonly property string agentState: item ? root.agentStateFor(item.addresses) : ""
+                  readonly property bool herdrHost: !!item && root.herdrAgents.length > 0 && root.herdrHosted(item.addresses)
+                  readonly property int herdrLive: herdrHost ? root.herdrState.live : 0
 
                   implicitWidth: iconRow.implicitWidth + Style.space(4)
                   implicitHeight: Math.max(root.iconPx, iconRow.implicitHeight) + Style.space(4)
@@ -1008,6 +1154,30 @@ Panel {
                         }
                       }
 
+                      // How many Herdr agents are live, beside the badge,
+                      // once there is more than one.
+                      Rectangle {
+                        visible: agentBadge.visible && appIcon.herdrLive > 1
+                        anchors.right: agentBadge.left
+                        anchors.verticalCenter: agentBadge.verticalCenter
+                        anchors.rightMargin: -Style.space(1)
+                        width: Math.max(height, herdrCount.implicitWidth + Style.space(3))
+                        height: Math.round(root.iconPx * 0.5)
+                        radius: height / 2
+                        color: root.fg
+                        border.width: 1
+                        border.color: root.bg
+                        Text {
+                          id: herdrCount
+                          anchors.centerIn: parent
+                          text: String(appIcon.herdrLive)
+                          color: root.bg
+                          font.family: root.fontFamily
+                          font.pixelSize: Math.max(7, Math.round(root.iconPx * 0.42))
+                          font.bold: true
+                        }
+                      }
+
                       // Window count for grouped apps.
                       Rectangle {
                         visible: appIcon.item !== null && appIcon.item.count > 1
@@ -1063,6 +1233,7 @@ Panel {
                         if (appIcon.item.count > 1) tip = appIcon.info.name + " (" + appIcon.item.count + " windows)"
                         var agentText = { working: "Agent working", waiting: "Agent needs your input", done: "Agent finished" }[appIcon.agentState]
                         if (agentText) tip = agentText + " \u00b7 " + tip
+                        if (appIcon.herdrHost) tip = [tip].concat(Model.herdrTooltipLines(root.herdrAgents, 48)).join("\n")
                         if (!root.previewOpen) root.showTip(appIcon, tip)
                       } else {
                         root.hideTip(appIcon)

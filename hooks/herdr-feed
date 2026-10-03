@@ -1,0 +1,180 @@
+#!/usr/bin/env python3
+# Herdr agent status feed for the Spaces bar widget.
+#
+# Herdr is a terminal multiplexer that already knows what every coding agent
+# in its panes is doing, so instead of a reporter hook per agent the widget
+# listens to Herdr itself. This script holds Herdr's socket open, and on
+# startup and after every relevant event prints one JSON line to stdout:
+#
+#   {"type": "herdr", "focused_workspace_id": "w35",
+#    "agents": [{"pane_id", "workspace_id", "workspace_label",
+#                "workspace_number", "tab_id", "agent", "status", "title",
+#                "focused", "session"}]}
+#
+# `status` is Herdr's agent_status verbatim (idle | working | blocked | done |
+# unknown); the widget decides what earns a badge. Only panes running an agent
+# are listed.
+#
+# Herdr not installed or not running is not an error: the script exits 0
+# quietly and the widget tries again later. It also exits 0 when the server
+# goes away. Pass --once to print a single snapshot and exit.
+#
+# Stdlib only, so it runs anywhere python3 does.
+
+import json
+import os
+import select
+import signal
+import socket
+import sys
+import time
+
+# Events that can change an agent's status, title or workspace. Payloads are
+# ignored: each burst just triggers a fresh snapshot, which is simpler and
+# can never drift from what Herdr shows. (pane.agent_status_changed needs a
+# pane_id to subscribe, so pane.updated stands in for it.)
+EVENTS = [
+    "workspace.updated", "pane.updated", "pane.created", "pane.closed",
+    "pane.exited", "pane.agent_detected", "workspace.closed",
+    "workspace.renamed",
+]
+# The stream spells kinds with underscores (pane_updated); compare that way.
+RELEVANT = {kind.replace(".", "_") for kind in EVENTS}
+
+# Events arrive in bursts (subscribing alone replays a backlog). The first
+# event opens a short window; everything inside it shares one snapshot.
+DEBOUNCE = 0.15
+
+
+def socket_path():
+    return os.environ.get("HERDR_SOCKET_PATH") or os.path.expanduser("~/.config/herdr/herdr.sock")
+
+
+def connect():
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(socket_path())
+    return sock
+
+
+def send(sock, request_id, method, params=None):
+    message = {"id": request_id, "method": method, "params": params or {}}
+    sock.sendall((json.dumps(message) + "\n").encode())
+
+
+def snapshot():
+    # One short-lived connection per request keeps replies out of the event
+    # stream. Returns None when Herdr answers with an error.
+    with connect() as sock:
+        sock.settimeout(5)
+        send(sock, "spaces-snapshot", "session.snapshot")
+        reader = sock.makefile("rb")
+        for line in reader:
+            reply = json.loads(line)
+            if reply.get("id") != "spaces-snapshot":
+                continue
+            result = reply.get("result") or {}
+            return result.get("snapshot")
+    return None
+
+
+def normalize(snap):
+    workspaces = {w.get("workspace_id"): w for w in snap.get("workspaces") or []}
+    agents = []
+    for pane in snap.get("panes") or []:
+        status = pane.get("agent_status") or "unknown"
+        # A plain shell pane: nothing for the bar to say about it.
+        if pane.get("agent") is None and status == "unknown":
+            continue
+        workspace = workspaces.get(pane.get("workspace_id")) or {}
+        session = pane.get("agent_session") or {}
+        agents.append({
+            "pane_id": pane.get("pane_id"),
+            "workspace_id": pane.get("workspace_id"),
+            "workspace_label": workspace.get("label") or "",
+            "workspace_number": workspace.get("number") or 0,
+            "tab_id": pane.get("tab_id"),
+            "agent": pane.get("agent"),
+            "status": status,
+            "title": pane.get("terminal_title_stripped") or pane.get("terminal_title") or "",
+            "focused": pane.get("focused") is True,
+            "session": session.get("value") or "",
+        })
+    return {"type": "herdr", "agents": agents,
+            "focused_workspace_id": snap.get("focused_workspace_id")}
+
+
+class Printer:
+    # Only print when something changed: titles and focus move often, but a
+    # repeat of the last line would only wake the widget for nothing.
+    def __init__(self):
+        self.last = None
+
+    def emit(self, snap):
+        line = json.dumps(normalize(snap), separators=(",", ":"))
+        if line == self.last:
+            return
+        self.last = line
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+
+
+def relevant(line):
+    try:
+        message = json.loads(line)
+    except ValueError:
+        return False
+    if not isinstance(message, dict):
+        return False
+    return str(message.get("event") or "").replace(".", "_") in RELEVANT
+
+
+def watch(printer):
+    with connect() as sock:
+        send(sock, "spaces-events", "events.subscribe",
+             {"subscriptions": [{"type": kind} for kind in EVENTS]})
+        # Subscribe before the first snapshot so no change slips in between.
+        snap = snapshot()
+        if snap is not None:
+            printer.emit(snap)
+        buffer = b""
+        due = None
+        while True:
+            wait = None if due is None else max(0.0, due - time.monotonic())
+            ready, _, _ = select.select([sock], [], [], wait)
+            if ready:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    return  # Herdr closed the connection.
+                lines = (buffer + chunk).split(b"\n")
+                buffer = lines.pop()
+                if due is None and any(relevant(line) for line in lines):
+                    due = time.monotonic() + DEBOUNCE
+            if due is not None and time.monotonic() >= due:
+                due = None
+                snap = snapshot()
+                if snap is not None:
+                    printer.emit(snap)
+
+
+def main():
+    # The widget closing our stdout is a normal way to stop.
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    printer = Printer()
+    try:
+        if "--once" in sys.argv[1:]:
+            snap = snapshot()
+            if snap is not None:
+                printer.emit(snap)
+        else:
+            watch(printer)
+    except (OSError, ValueError):
+        # Missing or refused socket, or Herdr went away mid-request: say
+        # nothing. The widget retries on its own schedule.
+        pass
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
