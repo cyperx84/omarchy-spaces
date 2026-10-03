@@ -36,7 +36,7 @@ A part with no bind is left out, and a pill with no bind at all has no tooltip. 
 
 ## How binds are detected
 
-Spaces runs `hyprctl binds -j` when it starts and reads two kinds of bind.
+Spaces runs `hyprctl binds -j` when it starts and reads two kinds of bind. Some binds come back without their key; [How missing keys are recovered](#how-missing-keys-are-recovered) explains how Spaces fills those in.
 
 **Omarchy's Lua binds.** Omarchy 4 sets up its binds from Lua, so Hyprland lists them with the dispatcher `__lua` and the meaning is only in the bind's description. Spaces matches these descriptions, ignoring case:
 
@@ -63,14 +63,38 @@ o.bind("ALT + SHIFT + J", "Move window to workspace 1", hl.dsp.window.move({ wor
 
 Only a plain workspace number counts as the argument. Relative or named targets such as `e+1`, `previous` or `name:web` are not tied to one pill and are skipped.
 
+## How missing keys are recovered
+
+Hyprland 0.56 lists two kinds of bind without a key name:
+
+- **Binds made by key code**, such as `bind = SUPER, code:10, workspace, 1`. These come with an empty key name and the key code, here `10`.
+- **Lua binds made by key code**, such as Omarchy's stock `o.bind("SUPER + code:10", "Switch to workspace 1", ...)`. These come with an empty key name and key code `0`, so `hyprctl` gives no hint of the key at all. Omarchy's own `SUPER + 1` to `SUPER + 0` workspace binds are all of this kind.
+
+Spaces fills in both the way Omarchy's keybindings menu (`omarchy-menu-keybindings`) does, with a small helper, `hooks/bind-keys`. It is a Python 3 script, standard library only, that Spaces runs alongside `hyprctl binds -j`. It prints one JSON document:
+
+```json
+{"keymap": "xkbcli", "config": "lua",
+ "keycodes": {"10": "1", "19": "0", "20": "minus", "44": "j", "...": "..."},
+ "binds": [{"modmask": 64, "description": "Switch to workspace 1", "key": "code:10"}, "..."]}
+```
+
+**The keymap.** `keycodes` maps each key code to the first symbol on that key, read from `xkbcli compile-keymap` with the layout and variant from Hyprland's `input:kb_layout` and `input:kb_variant` (the first one, if you list several). If `xkbcli` is missing or fails, a built-in table covers the keys Omarchy binds by code: 10 to 19 are `1` to `0`, 20 is `minus`, 21 `equal`, 59 `comma`, 60 `period` and 61 `slash`. `keymap` says which one was used. A bind made by key code is then shown with that symbol, so `code:10` is shown as `1` and `code:20` as `-`.
+
+**The Lua source.** `binds` lists every bind with a description that your `~/.config/hypr/hyprland.lua` makes, in the order it makes them, with the key as written in the source. To get it, the helper runs your config in a separate `lua` process in which Hyprland's `hl` table is a stub that only records binds, as Omarchy's menu does. The run is also kept read-only: files can only be opened for reading, `os.execute`, `os.remove`, `os.rename`, `os.exit`, `io.output` and C modules are disabled, and `io.popen` only runs the `find` directory listing that Omarchy's config uses to load its bind files. `config` is `lua` when this ran and `none` when there is no `hyprland.lua` or no `lua`.
+
+Spaces then matches a bind that `hyprctl` lists without a key to the source bind with the same modifiers and description, skipping source keys that `hyprctl` already shows for that description. So Omarchy's `Switch to workspace 1` on `SUPER` gets `code:10`, shown as `1`, while your own `SUPER + J` with the same description keeps its `J`.
+
+Each step of the helper has a three second limit. Without `python3` it does not run, and if anything fails it leaves that part empty, writes nothing to stderr and exits 0. Spaces then shows what `hyprctl` reports by itself: binds by key name work, and binds by key code show as `code:N` (classic) or are skipped (Lua).
+
 ## Which bind wins
 
 When several binds reach the same workspace, for example Omarchy's `SUPER + 1` and your own `SUPER + J`, Spaces picks one per workspace, separately for switch keys and move keys:
 
 1. For move keys, a plain move beats a silent one.
-2. Then the modifiers used most often across all binds of that kind win. If you bound six workspaces to `SUPER + letter` and two leftovers use `CTRL + digit`, the `SUPER` binds win. This keeps one consistent scheme on the bar.
-3. On a tie, the bind with the lower Hyprland modifier mask wins.
-4. On a further tie, the bind listed first by `hyprctl` wins.
+2. Then a key other than the workspace's own number beats the number. `SUPER + 1` for workspace 1 is the default every Omarchy setup has, so any other key reaching workspace 1 is one you bound yourself. With Omarchy's binds and your own `SUPER + J` and `ALT + SHIFT + J` for workspace 1, the pill shows `J` and the tooltip names `ALT + SHIFT + J`; workspaces you did not rebind keep `SUPER + 7` and `SUPER + SHIFT + 7`.
+3. Then the modifiers used most often across all binds of that kind win. If you bound six workspaces to `SUPER + letter` and two leftovers use `CTRL + letter`, the `SUPER` binds win. This keeps one consistent scheme on the bar.
+4. On a tie, the bind with the lower Hyprland modifier mask wins.
+5. On a further tie, the bind listed first by `hyprctl` wins.
 
 ## How keys are written
 
@@ -94,24 +118,30 @@ Modifiers are written in the order `SUPER`, `CTRL`, `ALT`, `SHIFT`, followed by 
 | `Tab` | `Tab` |
 | `Escape` | `Esc` |
 
-Any other key is shown as Hyprland names it, for example `F5`. A classic bind made by key code, which Hyprland lists with an empty key name and a key code, is shown as `code:N`.
+Any other key is shown as Hyprland names it, for example `F5`. A bind made by key code is shown with the symbol the keymap gives that code, spelled the same way, so `code:10` is `1` and `code:20` is `-` (see [How missing keys are recovered](#how-missing-keys-are-recovered)). A code the keymap does not know is shown as `code:N`.
 
 ## When binds are read again
 
-Spaces reads the binds once at startup and again half a second after Hyprland reports a config reload. Saving your Hyprland config normally triggers a reload, so a new bind shows on the bar a moment later. If the scan fails, Spaces keeps the keys it already knew.
+Spaces reads the binds, and runs `hooks/bind-keys`, once at startup and again half a second after Hyprland reports a config reload. Saving your Hyprland config normally triggers a reload, so a new bind shows on the bar a moment later. If `hyprctl binds -j` fails, Spaces keeps the keys it already knew.
 
 ## What is skipped
 
 - Binds inside a submap: they only work after entering the submap, so they are not the key that reaches a workspace.
 - Mouse binds.
-- Binds with an empty key name and no key code. Hyprland lists some Lua binds twice, once without a key, and the empty copy is ignored.
+- Binds with an empty key name and no key code whose key cannot be recovered: a Lua bind with no description, one that `hooks/bind-keys` cannot find in your `hyprland.lua` with the same modifiers and description, and every such bind when the helper cannot run.
 - Binds whose description or dispatcher does not match the patterns above.
 
 ## My keys do not show
 
 1. **Check the label style.** Under Appearance, "Workspace label" must be "Number + key" or "Key". Number, Glyph and None never show keys.
 2. **Check that the key is not the number.** In "Number + key", `SUPER + 3` on workspace 3 shows no caption, because it would read `3 3`.
-3. **Check Omarchy's stock binds.** Omarchy binds `SUPER + 1` to `SUPER + 0` by key code (`code:10` and up). Hyprland 0.56 lists those Lua binds with an empty key name and key code 0, so Spaces cannot tell which key they use and skips them. With only the stock binds, pills show their numbers and have no shortcut tooltip. Binds by key name, such as `SUPER + J`, work.
+3. **Check the helper.** Keys for binds made by key code, including Omarchy's stock `SUPER + 1` to `SUPER + 0`, come from `hooks/bind-keys`. Run it and check that `binds` lists your workspace binds and `keycodes` has `"10": "1"`:
+
+   ```sh
+   python3 ~/.config/omarchy/plugins/cyperx84.spaces/hooks/bind-keys | jq '{keymap, config, keycode10: .keycodes["10"], binds: [.binds[] | select(.description | test("workspace [0-9]+$"; "i"))]}'
+   ```
+
+   `config` reads `none` when there is no `~/.config/hypr/hyprland.lua` or no `lua`; then Lua binds made by key code are skipped. `keymap` reads `fallback` when `xkbcli` is missing, which still covers the number row.
 4. **Check the description.** A Lua bind is only recognised by its description. "Go to workspace 1" or "Workspace 1" will not match; it must read "Switch to workspace 1", "Move window to workspace 1" or "Move window silently to workspace 1".
 5. **Check for a submap.** Binds inside a submap are skipped.
 6. **Reload.** Run `hyprctl reload`, or restart the shell, if Hyprland did not reload after your edit.
@@ -124,4 +154,4 @@ Spaces reads the binds once at startup and again half a second after Hyprland re
      | {modmask, key, keycode, dispatcher, arg, description, submap, mouse}'
    ```
 
-   A usable bind has a non-empty `key` (or a non-zero `keycode`), an empty `submap`, and `mouse` false. For a classic bind, `arg` must be a plain number.
+   A usable bind has a non-empty `key`, a non-zero `keycode`, or a description that the helper's `binds` lists with the same `modmask`. It also needs an empty `submap` and `mouse` false. For a classic bind, `arg` must be a plain number.

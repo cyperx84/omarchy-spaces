@@ -11,7 +11,7 @@ Open an issue with the [bug report form](https://github.com/cyperx84/omarchy-spa
 - **Steps to reproduce**, what you expected, and what happened instead. A screenshot or short recording helps for anything visual.
 - **The shell log.** Run `qs log -p /usr/share/omarchy/shell` and paste the lines around the problem, especially any that mention `Spaces.qml`, `SpacesSettings.qml` or `Model.js`.
 
-For key hints, include the output of `hyprctl binds -j` for your workspace binds. For agent status, include the output of `python3 ~/.config/omarchy/plugins/cyperx84.spaces/hooks/herdr-feed --once`. Remove anything private, such as window titles, first.
+For key hints, include the output of `hyprctl binds -j` for your workspace binds and of `python3 ~/.config/omarchy/plugins/cyperx84.spaces/hooks/bind-keys`. For agent status, include the output of `python3 ~/.config/omarchy/plugins/cyperx84.spaces/hooks/herdr-feed --once`. Remove anything private, such as window titles, first.
 
 Check [docs/troubleshooting.md](docs/troubleshooting.md) before filing; your problem may already have a fix.
 
@@ -29,7 +29,7 @@ Before you open a pull request, run:
 
 ```sh
 node tests/model.test.js
-python3 -m py_compile hooks/herdr-feed
+python3 -m py_compile hooks/herdr-feed hooks/bind-keys
 bash tests/settings.sh
 ```
 
@@ -58,7 +58,7 @@ Spaces is a workspace switcher for the Omarchy bar. Contributions that fit:
 What the project will not take:
 
 - Features unrelated to workspaces or agents, which belong in a separate widget
-- Code that needs root, network access or new runtime dependencies beyond Omarchy, Hyprland, Quickshell and, for agents, Python 3 and Herdr
+- Code that needs root, network access or new runtime dependencies beyond Omarchy, Hyprland, Quickshell, Python 3 (for agents and for recovering bind keys) and, for agents, Herdr
 - Changes that make the widget fail or log errors when Herdr or Python is missing
 - Support for compositors other than Hyprland
 

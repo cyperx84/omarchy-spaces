@@ -133,6 +133,134 @@ test("workspaceKeyBinds prefers the most common modifiers, then the lowest, then
   assert.strictEqual(out[2].move, null)
 })
 
+// hooks/bind-keys output as it looks on a stock Omarchy install (trimmed).
+const helperOutput = {
+  keymap: "xkbcli", config: "lua",
+  keycodes: { "10": "1", "11": "2", "19": "0", "20": "minus", "21": "equal", "44": "j" },
+  binds: [
+    { modmask: 64, description: "Switch to workspace 1", key: "code:10" },
+    { modmask: 65, description: "Move window to workspace 1", key: "code:10" },
+    { modmask: 73, description: "Move window silently to workspace 1", key: "code:10" },
+    { modmask: 64, description: "Switch to workspace 2", key: "code:11" },
+    { modmask: 65, description: "Move window to workspace 2", key: "code:11" },
+    { modmask: 64, description: "Switch to workspace 10", key: "code:19" },
+    { modmask: 64, description: "Expand window left", key: "code:20" }
+  ]
+}
+// `hyprctl binds -j` for the same binds: no key and no keycode.
+const stockBinds = [
+  { modmask: 64, key: "", keycode: 0, dispatcher: "__lua", arg: "45", description: "Switch to workspace 1", submap: "" },
+  { modmask: 65, key: "", keycode: 0, dispatcher: "__lua", arg: "46", description: "Move window to workspace 1", submap: "" },
+  { modmask: 73, key: "", keycode: 0, dispatcher: "__lua", arg: "47", description: "Move window silently to workspace 1", submap: "" },
+  { modmask: 64, key: "", keycode: 0, dispatcher: "__lua", arg: "48", description: "Switch to workspace 2", submap: "" },
+  { modmask: 65, key: "", keycode: 0, dispatcher: "__lua", arg: "49", description: "Move window to workspace 2", submap: "" },
+  { modmask: 64, key: "", keycode: 0, dispatcher: "__lua", arg: "72", description: "Switch to workspace 10", submap: "" }
+]
+
+test("workspaceKeyBinds resolves classic keycode-only binds through the keymap", () => {
+  const classic = [
+    { modmask: 64, key: "", keycode: 10, dispatcher: "workspace", arg: "1", description: "" },
+    { modmask: 65, key: "", keycode: 10, dispatcher: "movetoworkspace", arg: "1", description: "" },
+    { modmask: 64, key: "", keycode: 20, dispatcher: "workspace", arg: "11", description: "" }
+  ]
+  assert.deepStrictEqual(M.workspaceKeyBinds(classic, helperOutput), {
+    1: { switch: { mods: ["SUPER"], key: "1" }, move: { mods: ["SUPER", "SHIFT"], key: "1" } },
+    11: { switch: { mods: ["SUPER"], key: "-" }, move: null }
+  })
+  // Without the helper the keycode is still shown, as before.
+  assert.deepStrictEqual(M.workspaceKeyBinds(classic)[1].switch, { mods: ["SUPER"], key: "code:10" })
+})
+
+test("workspaceKeyBinds recovers keyless Lua binds by modmask and description", () => {
+  const out = M.workspaceKeyBinds(stockBinds, helperOutput)
+  assert.deepStrictEqual(out[1], { switch: { mods: ["SUPER"], key: "1" }, move: { mods: ["SUPER", "SHIFT"], key: "1" } })
+  assert.deepStrictEqual(out[2], { switch: { mods: ["SUPER"], key: "2" }, move: { mods: ["SUPER", "SHIFT"], key: "2" } })
+  assert.deepStrictEqual(out[10], { switch: { mods: ["SUPER"], key: "0" }, move: null })
+  // The number needs no caption, but the tooltip and "key" label have it.
+  assert.strictEqual(M.workspaceCaption(1, "both", out[1]), "")
+  assert.strictEqual(M.workspaceLabel(10, false, "key", out[10]), "0")
+  assert.strictEqual(M.keyTooltip(1, out[1]), "Workspace 1 · SUPER + 1 to switch · SUPER + SHIFT + 1 to move window here")
+  // The JSON text works as well as the parsed value.
+  assert.deepStrictEqual(M.workspaceKeyBinds(stockBinds, JSON.stringify(helperOutput)), out)
+})
+
+test("workspaceKeyBinds still skips binds whose key cannot be recovered", () => {
+  const binds = [
+    // No source bind with this description.
+    { modmask: 64, key: "", keycode: 0, dispatcher: "__lua", description: "Switch to workspace 7" },
+    // Same description, other modifiers: not the same bind.
+    { modmask: 68, key: "", keycode: 0, dispatcher: "__lua", description: "Switch to workspace 2" },
+    // A keycode the keymap does not know keeps its code.
+    { modmask: 64, key: "", keycode: 191, dispatcher: "workspace", arg: "8", description: "" }
+  ]
+  assert.deepStrictEqual(M.workspaceKeyBinds(binds, helperOutput), {
+    8: { switch: { mods: ["SUPER"], key: "code:191" }, move: null }
+  })
+  // A source key `hyprctl` already shows is not handed to a keyless copy.
+  const shown = [
+    { modmask: 64, key: "J", keycode: 0, dispatcher: "__lua", description: "Switch to workspace 1" },
+    { modmask: 64, key: "", keycode: 0, dispatcher: "__lua", description: "Switch to workspace 1" }
+  ]
+  const onlyJ = { binds: [{ modmask: 64, description: "Switch to workspace 1", key: "j" }] }
+  assert.deepStrictEqual(M.workspaceKeyBinds(shown, onlyJ)[1].switch, { mods: ["SUPER"], key: "J" })
+})
+
+test("workspaceKeyBinds prefers a key other than the workspace's number", () => {
+  // Stock binds first, then the user's own J/K scheme, as `hyprctl` lists them.
+  const user = stockBinds.concat([
+    { modmask: 64, key: "J", keycode: 0, dispatcher: "__lua", description: "Switch to workspace 1", submap: "" },
+    { modmask: 9, key: "J", keycode: 0, dispatcher: "__lua", description: "Move window to workspace 1", submap: "" },
+    { modmask: 64, key: "K", keycode: 0, dispatcher: "__lua", description: "Switch to workspace 2", submap: "" },
+    { modmask: 9, key: "K", keycode: 0, dispatcher: "__lua", description: "Move window to workspace 2", submap: "" }
+  ])
+  const data = JSON.parse(JSON.stringify(helperOutput))
+  data.binds.push({ modmask: 64, description: "Switch to workspace 1", key: "J" },
+    { modmask: 9, description: "Move window to workspace 1", key: "J" },
+    { modmask: 64, description: "Switch to workspace 2", key: "K" },
+    { modmask: 9, description: "Move window to workspace 2", key: "K" })
+  const out = M.workspaceKeyBinds(user, data)
+  assert.deepStrictEqual(out[1], { switch: { mods: ["SUPER"], key: "J" }, move: { mods: ["ALT", "SHIFT"], key: "J" } })
+  assert.deepStrictEqual(out[2], { switch: { mods: ["SUPER"], key: "K" }, move: { mods: ["ALT", "SHIFT"], key: "K" } })
+  assert.deepStrictEqual(out[10].switch, { mods: ["SUPER"], key: "0" })
+  // The same holds whichever comes first.
+  assert.deepStrictEqual(M.workspaceKeyBinds(user.slice().reverse(), data)[1], out[1])
+  // With only the stock binds, the number is the key.
+  assert.deepStrictEqual(M.workspaceKeyBinds(stockBinds, helperOutput)[1].switch, { mods: ["SUPER"], key: "1" })
+})
+
+test("bindKeyText normalises keycodes and keysyms", () => {
+  const codes = helperOutput.keycodes
+  assert.strictEqual(M.bindKeyText("code:10", codes), "1")
+  assert.strictEqual(M.bindKeyText("code:19", codes), "0")
+  assert.strictEqual(M.bindKeyText("code:20", codes), "-")
+  assert.strictEqual(M.bindKeyText("code:21", codes), "=")
+  assert.strictEqual(M.bindKeyText("code:44", codes), "J")
+  assert.strictEqual(M.bindKeyText("code:99", codes), "code:99")
+  assert.strictEqual(M.bindKeyText("code:10", null), "code:10")
+  assert.strictEqual(M.bindKeyText("SUPER + code:10", codes), "1")
+  assert.strictEqual(M.bindKeyText("SUPER + SHIFT + comma", codes), ",")
+  assert.strictEqual(M.bindKeyText("Return", codes), "Enter")
+  assert.strictEqual(M.bindKeyText("j", codes), "J")
+})
+
+test("bindKeyData ignores malformed helper output", () => {
+  const empty = { keycodes: {}, binds: [] }
+  for (const bad of [undefined, null, "", "not json", "[]", "3", 3, [], true, { keycodes: [1], binds: "x" }])
+    assert.deepStrictEqual(M.bindKeyData(bad), empty)
+  assert.deepStrictEqual(M.bindKeyData({
+    keycodes: { "10": "1", "x": "2", "11": 2, "12": "", "13": "4" },
+    binds: [null, 5, { modmask: "64", description: "A", key: "B" }, { modmask: -1, description: "A", key: "B" },
+      { modmask: 1.5, description: "A", key: "B" }, { modmask: 64, description: "", key: "B" },
+      { modmask: 64, description: "A", key: 7 }, { modmask: 64, description: "Switch to workspace 1", key: "code:10" }]
+  }), {
+    keycodes: { "10": "1", "13": "4" },
+    binds: [{ modmask: 64, description: "A", key: "B" }, { modmask: 64, description: "Switch to workspace 1", key: "code:10" }]
+  })
+  // Garbage from the helper changes nothing.
+  assert.deepStrictEqual(M.workspaceKeyBinds(stockBinds, "garbage"), {})
+  assert.deepStrictEqual(M.workspaceKeyBinds(stockBinds, { binds: [{ description: 1 }] }), {})
+})
+
 test("keyTooltip names the keys for a workspace", () => {
   const sw = { mods: ["SUPER"], key: "L" }
   const mv = { mods: ["ALT", "SHIFT"], key: "L" }

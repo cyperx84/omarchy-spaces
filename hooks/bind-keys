@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+# Recovers the keys that `hyprctl binds -j` leaves out, for the Spaces key
+# hints. Prints one JSON document to stdout and exits:
+#
+#   {"keymap": "xkbcli" | "fallback",
+#    "config": "lua" | "none",
+#    "keycodes": {"10": "1", "20": "minus", "44": "j", ...},
+#    "binds": [{"modmask": 64, "description": "Switch to workspace 1",
+#               "key": "code:10"}, ...]}
+#
+# Two gaps, both handled the way Omarchy's own keybindings menu
+# (omarchy-menu-keybindings) handles them:
+#
+# - `code:N` binds name a keycode, not a key. `keycodes` maps each keycode to
+#   the first keysym of that key in the compiled keymap (`xkbcli
+#   compile-keymap` with Hyprland's kb_layout and kb_variant), laid over a
+#   small built-in table (10-19 are the digits 1-0, 20 minus, 21 equal, 59
+#   comma, 60 period, 61 slash), which is all there is without xkbcli.
+#
+# - Binds made from Lua (Omarchy's hyprland.lua) are reported without their
+#   key when that key is a `code:N`: `{"modmask": 64, "key": "", "keycode":
+#   0, "description": "Switch to workspace 1"}`. `binds` lists every bind
+#   with a description that the config makes, in the order it makes them,
+#   with the key as written in the source, so the widget can match the two by
+#   modmask and description. The config is read by running it in a separate
+#   `lua` process with Hyprland's `hl` table replaced by a stub that only
+#   records binds, as Omarchy's menu does. On top of that this script makes
+#   the run read-only: files open for reading only, no os.execute, os.remove,
+#   os.rename, os.exit, C modules or io.output, and io.popen only for the
+#   `find ... -name '*.lua'` directory listing Omarchy's require_all uses.
+#   Anything else the config asks for fails quietly inside the stub.
+#
+# Every step has a time limit. A missing tool, a config that fails or any
+# other problem is not an error: that part is just left empty, nothing is
+# written to stderr, and the exit status is 0.
+#
+# Stdlib only, so it runs anywhere python3 does.
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+STEP_TIMEOUT = 3.0
+
+# Omarchy's fallback for when xkbcli cannot resolve a keycode.
+FALLBACK_KEYCODES = {
+    "10": "1", "11": "2", "12": "3", "13": "4", "14": "5",
+    "15": "6", "16": "7", "17": "8", "18": "9", "19": "0",
+    "20": "minus", "21": "equal", "59": "comma", "60": "period", "61": "slash",
+}
+
+LUA_STUB = r"""
+local config = arg[1]
+local out = io.stdout
+local records = {}
+
+-- Hyprland's modifier bits, as `hyprctl binds -j` reports them in modmask.
+local modifiers = {
+  SHIFT = 1, CAPS = 2, CTRL = 4, CONTROL = 4, ALT = 8, MOD1 = 8, MOD2 = 16,
+  MOD3 = 32, SUPER = 64, WIN = 64, LOGO = 64, MOD4 = 64, META = 64, MOD5 = 128,
+}
+
+local function split_keys(keys)
+  local modmask, key = 0, ""
+  for part in string.gmatch(tostring(keys or ""), "[^+]+") do
+    local value = part:gsub("^%s+", ""):gsub("%s+$", "")
+    local bit = modifiers[string.upper(value)]
+    if bit then
+      if modmask & bit == 0 then modmask = modmask + bit end
+    elseif value ~= "" then
+      key = value
+    end
+  end
+  return modmask, key
+end
+
+local function clean(value)
+  return (tostring(value):gsub("[%c]", " "))
+end
+
+-- Anything the config calls or reads on this stub is a no-op.
+local noop
+noop = setmetatable({}, {
+  __index = function() return noop end,
+  __call = function() return noop end,
+})
+
+-- hl.dsp.<anything>(...) gives a plain table, as Omarchy's helpers inspect
+-- dispatchers (dispatcher.omarchy, .launch) and the noop would answer those.
+local dsp
+dsp = setmetatable({}, {
+  __index = function() return dsp end,
+  __call = function() return {} end,
+})
+
+hl = setmetatable({
+  dsp = dsp,
+  bind = function(keys, _, opts)
+    if type(opts) == "table" and type(opts.description) == "string" and opts.description ~= "" then
+      local modmask, key = split_keys(keys)
+      if key ~= "" then
+        records[#records + 1] = table.concat({ tostring(modmask), clean(opts.description), clean(key) }, "\t")
+      end
+    end
+    return noop
+  end,
+  get_config = function() return nil end,
+}, { __index = function() return noop end })
+
+-- Read-only sandbox.
+local real_open, real_popen = io.open, io.popen
+local function refuse() return nil, "disabled by Spaces bind-keys" end
+io.open = function(path, mode)
+  mode = mode or "r"
+  if not tostring(mode):match("^rb?$") then return refuse() end
+  return real_open(path, mode)
+end
+io.popen = function(command, mode)
+  command = tostring(command or "")
+  local listing = "^find '[^']*' %-maxdepth 1 %-type f %-name '%*%.lua' %-printf '%%f\\n' 2>/dev/null | sort$"
+  if (mode == nil or mode == "r") and command:match(listing) then return real_popen(command, "r") end
+  return refuse()
+end
+io.output = function() return io.stdout end
+os.execute = function() return nil, "exit", 1 end
+os.remove = refuse
+os.rename = refuse
+os.tmpname = function() error("disabled by Spaces bind-keys") end
+os.exit = function() error("disabled by Spaces bind-keys") end
+print = function() end
+package.cpath = ""
+package.loadlib = refuse
+
+local file = real_open(config, "r")
+if file then
+  file:close()
+  pcall(dofile, config)
+end
+
+for _, record in ipairs(records) do
+  out:write("@spaces-bind\t", record, "\n")
+end
+out:flush()
+"""
+
+
+def run(command, stdin=None):
+    """stdout of a command, or None when it is missing, fails or runs late."""
+    if shutil.which(command[0]) is None:
+        return None
+    try:
+        result = subprocess.run(
+            command, input=stdin, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            stdin=None if stdin is not None else subprocess.DEVNULL,
+            timeout=STEP_TIMEOUT, text=True, errors="replace",
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def hypr_option(name):
+    text = run(["hyprctl", "getoption", name, "-j"])
+    try:
+        value = json.loads(text).get("str", "") if text else ""
+    except (ValueError, AttributeError):
+        return ""
+    # The first layout of a list ("us,de") is the one Hyprland starts with.
+    return str(value or "").split(",")[0].strip()
+
+
+def parse_keymap(text):
+    """{keycode: first keysym} from `xkbcli compile-keymap` output."""
+    codes_part = re.search(r"xkb_keycodes\b.*?\n\};", text, re.S)
+    symbols_part = re.search(r"xkb_symbols\b.*?\n\};", text, re.S)
+    if not codes_part or not symbols_part:
+        return {}
+    codes = {}
+    for name, code in re.findall(r"^\s*<([A-Za-z0-9_+-]+)>\s*=\s*(\d+)\s*;", codes_part.group(0), re.M):
+        codes[name] = code
+    for alias, target in re.findall(r"^\s*alias\s*<([A-Za-z0-9_+-]+)>\s*=\s*<([A-Za-z0-9_+-]+)>\s*;",
+                                    codes_part.group(0), re.M):
+        if target in codes:
+            codes.setdefault(alias, codes[target])
+    out = {}
+    for name, body in re.findall(r"key\s*<([A-Za-z0-9_+-]+)>\s*\{(.*?)\};", symbols_part.group(0), re.S):
+        first = re.search(r"\[\s*([^,\s\]]+)", body)
+        if name in codes and first and first.group(1) != "NoSymbol":
+            out.setdefault(codes[name], first.group(1))
+    return out
+
+
+def keycodes():
+    table = dict(FALLBACK_KEYCODES)
+    command = ["xkbcli", "compile-keymap"]
+    layout, variant = hypr_option("input:kb_layout"), hypr_option("input:kb_variant")
+    if layout:
+        command += ["--layout", layout]
+        if variant:
+            command += ["--variant", variant]
+    text = run(command)
+    if text is None and layout:
+        text = run(["xkbcli", "compile-keymap"])
+    resolved = parse_keymap(text) if text else {}
+    table.update(resolved)
+    return table, ("xkbcli" if resolved else "fallback")
+
+
+def lua_binds():
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    config = os.path.join(base, "hypr", "hyprland.lua")
+    if not os.path.isfile(config):
+        return [], "none"
+    lua = next((name for name in ("lua", "lua5.4") if shutil.which(name)), None)
+    if lua is None:
+        return [], "none"
+    text = run([lua, "-", config], stdin=LUA_STUB)
+    binds = []
+    for line in (text or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) != 4 or parts[0] != "@spaces-bind" or not parts[1].isdigit():
+            continue
+        binds.append({"modmask": int(parts[1]), "description": parts[2], "key": parts[3]})
+    return binds, "lua"
+
+
+def main():
+    result = {"keymap": "fallback", "config": "none", "keycodes": {}, "binds": []}
+    try:
+        result["keycodes"], result["keymap"] = keycodes()
+        result["binds"], result["config"] = lua_binds()
+    except Exception:
+        pass
+    try:
+        sys.stdout.write(json.dumps(result, separators=(",", ":")) + "\n")
+        sys.stdout.flush()
+    except Exception:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

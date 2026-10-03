@@ -27,6 +27,9 @@ jobs:
       - name: Herdr feed compiles
         run: python3 -m py_compile hooks/herdr-feed
 
+      - name: Bind keys helper compiles
+        run: python3 -m py_compile hooks/bind-keys
+
       - name: Manifest matches Model.js defaults
         run: |
           node - <<'JS'

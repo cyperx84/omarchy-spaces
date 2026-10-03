@@ -47,7 +47,7 @@ After the pills, the agents chip counts waiting, working and done agents. Click 
   <img src=".github/assets/key-hints.png" width="100%" alt="The same row of workspace pills in four label styles, stacked top to bottom: Number + key, with a small key caption after each number; Key, showing only the bound key; Number; and Glyph, where the focused workspace shows a glyph instead of its number" />
 </p>
 
-Spaces reads `hyprctl binds -j` and works out which key switches to each workspace, so the pill can show it. If `SUPER + J` takes you to workspace 1, its pill reads `1` with a small `J`. It follows whatever you have bound, either Omarchy's Lua binds or classic `workspace` binds, and reads them again when Hyprland reloads its config. Hover a pill for a tooltip that names the keys to switch there and to move a window there. See [docs/key-hints.md](docs/key-hints.md).
+Spaces reads `hyprctl binds -j` and works out which key switches to each workspace, so the pill can show it. If `SUPER + J` takes you to workspace 1, its pill reads `1` with a small `J`. It follows whatever you have bound, either Omarchy's Lua binds or classic `workspace` binds, including binds made by key code such as Omarchy's stock `SUPER + 1`, and reads them again when Hyprland reloads its config. Hover a pill for a tooltip that names the keys to switch there and to move a window there. See [docs/key-hints.md](docs/key-hints.md).
 
 ### Settings panel
 
@@ -64,6 +64,7 @@ The panel works from the keyboard: Tab and Shift+Tab move between controls, Ente
 - Omarchy 4 with its Quickshell bar
 - Hyprland 0.56 or newer
 - For agent status only: [Herdr](https://herdr.dev) and `python3`
+- For the keys of binds made by key code, such as Omarchy's stock `SUPER + 1` to `SUPER + 0`: `python3`, plus `lua` for a Lua config. `xkbcli` is used when present. Omarchy has all three
 
 Spaces works with the bar on any edge of the screen. It is tested on a single monitor.
 
@@ -170,7 +171,7 @@ If you bound any `omarchy-shell cyperx84.spaces` calls to keys, remove them from
 
 - **The widget does not appear after installing.** Plugins are added disabled. Run `omarchy plugin enable cyperx84.spaces --section left`.
 - **No agent badges.** Herdr has to be running, `python3` has to be installed, and Herdr's client has to run in a terminal window. Check with `python3 ~/.config/omarchy/plugins/cyperx84.spaces/hooks/herdr-feed --once`, which prints what Spaces sees.
-- **No key captions.** Spaces can only show a key Hyprland reports by name. Omarchy's stock `SUPER + 1` to `SUPER + 0` binds are reported without one, so with them the pills show only numbers. Run `hyprctl binds -j` to see what Spaces sees.
+- **No key captions.** A key that only repeats the pill's number, such as Omarchy's stock `SUPER + 1` on workspace 1, gets no caption, but it is in the shortcut tooltip. Keys of binds made by key code come from `hooks/bind-keys`; check with `python3 ~/.config/omarchy/plugins/cyperx84.spaces/hooks/bind-keys`, and run `hyprctl binds -j` to see what Hyprland reports.
 - **Every terminal window gets the badge.** Your terminal serves several windows from one process, so Spaces cannot tell which one runs Herdr.
 
 More, with causes and fixes: [docs/troubleshooting.md](docs/troubleshooting.md).

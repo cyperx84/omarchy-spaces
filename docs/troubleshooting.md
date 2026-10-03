@@ -67,7 +67,7 @@ It should print one line of JSON starting with `{"type":"herdr"`. No output mean
 
 **The caption would repeat the number.** `SUPER + 3` on workspace 3 shows no caption in "Number + key".
 
-**Your binds use key codes.** Omarchy's stock `SUPER + 1` to `SUPER + 0` binds are made by key code, and Hyprland lists them without a key name, so Spaces cannot show them. Binds by key name, such as `SUPER + J`, work.
+**The key helper could not run.** Binds made by key code, including Omarchy's stock `SUPER + 1` to `SUPER + 0`, are listed by Hyprland without a key name. Spaces recovers their keys with `hooks/bind-keys`, which needs `python3`, and `lua` for a `hyprland.lua` config. Run `python3 ~/.config/omarchy/plugins/cyperx84.spaces/hooks/bind-keys`: `config` should read `lua` and `binds` should list your workspace binds. Binds by key name, such as `SUPER + J`, work without it.
 
 **The bind's description does not match.** Lua binds are recognised only by descriptions such as "Switch to workspace 1".
 

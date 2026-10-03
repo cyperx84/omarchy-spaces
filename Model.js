@@ -755,28 +755,128 @@ function bindAction(bind) {
   return null
 }
 
-// The keys that reach each workspace, from the parsed `hyprctl binds -j`:
+// hooks/bind-keys output, checked: { keycodes: { "10": "1", ... },
+// binds: [{ modmask, description, key }] }. Accepts the JSON text or the
+// parsed value; anything malformed is dropped, so the result is always usable.
+function bindKeyData(value) {
+  var out = { keycodes: {}, binds: [] }
+  var data = value
+  if (typeof data === "string") {
+    try { data = JSON.parse(data) } catch (e) { return out }
+  }
+  if (!data || typeof data !== "object" || Array.isArray(data)) return out
+  var codes = data.keycodes
+  if (codes && typeof codes === "object" && !Array.isArray(codes)) {
+    for (var code in codes) {
+      if (!codes.hasOwnProperty(code) || !/^\d+$/.test(code)) continue
+      if (typeof codes[code] === "string" && codes[code] !== "") out.keycodes[code] = codes[code]
+    }
+  }
+  var list = Array.isArray(data.binds) ? data.binds : []
+  for (var i = 0; i < list.length; i++) {
+    var b = list[i]
+    if (!b || typeof b !== "object") continue
+    var mask = Number(b.modmask)
+    if (!isFinite(mask) || mask < 0 || mask !== Math.floor(mask)) continue
+    if (typeof b.description !== "string" || b.description === "") continue
+    if (typeof b.key !== "string" || b.key === "") continue
+    out.binds.push({ modmask: mask, description: b.description, key: b.key })
+  }
+  return out
+}
+
+// Display spelling of a bind's key. Lua binds can report the whole combo
+// ("SUPER + code:10"); the modifiers are in modmask already. A `code:N`
+// keycode goes through the keymap from hooks/bind-keys, and stays "code:N"
+// when the keymap does not know it.
+function bindKeyText(key, keycodes) {
+  var value = String(key || "")
+  var plus = value.lastIndexOf(" + ")
+  if (plus !== -1) value = value.slice(plus + 3)
+  var m = /^code:(\d+)$/.exec(value)
+  if (m) {
+    var sym = keycodes && keycodes.hasOwnProperty(m[1]) ? keycodes[m[1]] : ""
+    return sym !== "" ? keyDisplay(sym) : value
+  }
+  return keyDisplay(value)
+}
+
+// The key of every bind, by position in the parsed `hyprctl binds -j`, with
+// gaps filled from hooks/bind-keys: a nonzero keycode is "code:N"; a Lua bind
+// listed with neither key nor keycode takes the source key of a bind with the
+// same modmask and description that `hyprctl` has not already shown with a
+// key, in the order both are defined. "" when nothing is known.
+function bindKeys(list, data) {
+  var keys = []
+  var reported = {}
+  var waiting = {}
+  for (var i = 0; i < list.length; i++) {
+    var b = list[i]
+    keys.push("")
+    if (!b || typeof b !== "object") continue
+    var key = String(b.key || "")
+    var code = Number(b.keycode) || 0
+    var group = (Number(b.modmask) || 0) + "\u0001" + String(b.description || "")
+    if (key !== "") keys[i] = key
+    else if (code !== 0) keys[i] = "code:" + code
+    else if (b.description) {
+      if (!waiting[group]) waiting[group] = []
+      waiting[group].push(i)
+      continue
+    }
+    if (keys[i] !== "" && b.description) {
+      var shown = bindKeyText(keys[i], data.keycodes)
+      reported[group] = reported[group] || {}
+      reported[group][shown] = (reported[group][shown] || 0) + 1
+    }
+  }
+
+  var sources = {}
+  for (var j = 0; j < data.binds.length; j++) {
+    var s = data.binds[j]
+    var g = s.modmask + "\u0001" + s.description
+    if (!waiting[g]) continue
+    var text = bindKeyText(s.key, data.keycodes)
+    var seen = reported[g]
+    if (seen && seen[text] > 0) { seen[text]--; continue }
+    if (!sources[g]) sources[g] = []
+    sources[g].push(s.key)
+  }
+  for (var w in waiting) {
+    var from = sources[w] || []
+    for (var k = 0; k < waiting[w].length && k < from.length; k++) keys[waiting[w][k]] = from[k]
+  }
+  return keys
+}
+
+// The keys that reach each workspace, from the parsed `hyprctl binds -j` and
+// optionally hooks/bind-keys' output (see bindKeyData), which supplies the
+// keys `hyprctl` leaves out:
 //   { [workspaceId]: { switch: { mods: ["SUPER"], key: "J" } | null, move: ... } }
-// Lua binds can be listed twice, once without a key; that copy is skipped,
-// as are binds inside a submap and mouse binds. With several binds for one
-// workspace, the modifiers used most across that kind of bind win (so a
-// layout's main scheme beats leftovers), then the lowest mask, then the
-// first listed. A plain move beats a silent one.
-function workspaceKeyBinds(binds) {
+// A bind whose key cannot be recovered is skipped, as are binds inside a
+// submap and mouse binds. With several binds for one workspace: a plain move
+// beats a silent one; then a key other than the workspace's own number beats
+// the number (SUPER + 1 on workspace 1 is the default every setup has, so
+// another key is one the user added); then the modifiers used most across
+// that kind of bind win (so a layout's main scheme beats leftovers), then the
+// lowest mask, then the first listed.
+function workspaceKeyBinds(binds, recovered) {
   var found = { "switch": [], move: [] }
   var counts = { "switch": {}, move: {} }
   var list = Array.isArray(binds) ? binds : []
+  var data = bindKeyData(recovered)
+  var keys = bindKeys(list, data)
   for (var i = 0; i < list.length; i++) {
     var b = list[i]
     if (!b || typeof b !== "object" || b.mouse === true || (b.submap && b.submap !== "")) continue
-    var key = String(b.key || "")
-    var code = Number(b.keycode) || 0
-    if (key === "" && code === 0) continue
+    if (keys[i] === "") continue
     var action = bindAction(b)
     if (!action) continue
     var mask = Number(b.modmask) || 0
+    var shown = bindKeyText(keys[i], data.keycodes)
     found[action.kind].push({ workspace: action.workspace, mask: mask, silent: action.silent, order: i,
-      bind: { mods: modNames(mask), key: key !== "" ? keyDisplay(key) : "code:" + code } })
+      number: shown === workspaceLabel(action.workspace, false, "number"),
+      bind: { mods: modNames(mask), key: shown } })
     counts[action.kind][mask] = (counts[action.kind][mask] || 0) + 1
   }
 
@@ -789,7 +889,9 @@ function workspaceKeyBinds(binds) {
       var cur = best[x.workspace]
       var better = !cur
         || (cur.silent && !x.silent)
-        || (cur.silent === x.silent && (c[x.mask] > c[cur.mask] || (c[x.mask] === c[cur.mask] && x.mask < cur.mask)))
+        || (cur.silent === x.silent && cur.number && !x.number)
+        || (cur.silent === x.silent && cur.number === x.number
+          && (c[x.mask] > c[cur.mask] || (c[x.mask] === c[cur.mask] && x.mask < cur.mask)))
       if (better) best[x.workspace] = x
     }
     for (var ws in best) {
@@ -857,6 +959,7 @@ if (typeof module !== "undefined") {
     previewWidth: previewWidth, previewDimensions: previewDimensions, monitorArea: monitorArea, previewLayout: previewLayout, durationFor: durationFor,
     workspaceIds: workspaceIds, workspaceLabel: workspaceLabel, workspaceCaption: workspaceCaption, appKey: appKey,
     modNames: modNames, keyDisplay: keyDisplay, workspaceKeyBinds: workspaceKeyBinds, keyHintText: keyHintText,
+    bindKeyData: bindKeyData, bindKeyText: bindKeyText,
     keyTooltip: keyTooltip,
     sortWindows: sortWindows, iconItems: iconItems, truncate: truncate,
     focusedLabel: focusedLabel, webAppHost: webAppHost, appIdCandidates: appIdCandidates, iconPathScore: iconPathScore,

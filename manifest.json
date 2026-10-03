@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "cyperx84.spaces",
   "name": "Spaces",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "author": "Cyperx",
   "description": "Workspace switcher that shows the apps open on each workspace",
   "kinds": [

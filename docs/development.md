@@ -9,6 +9,7 @@ How Spaces is put together, how to work on it, and how to release it.
 | `Spaces.qml` | The bar widget: pills, app icons, the agents chip and popup, the preview card, the settings panel host, the IPC handler, and the processes that read Hyprland's binds, scan icons, run the Herdr feed and probe for Herdr clients. |
 | `Model.js` | Pure logic with no QML objects: settings validation, workspace lists, labels, icon grouping, preview geometry, key bind parsing, agent state merging and the Herdr feed parsing. Loaded by QML as `.pragma library` and by node in the tests. |
 | `SpacesSettings.qml` | The settings form: six pages of toggles, choices and sliders. It only emits `settingChanged(delta)`, `resetRequested()` and `closeRequested()`; `Spaces.qml` saves. |
+| `hooks/bind-keys` | Python 3, standard library only. Prints one JSON document with the keymap from `xkbcli` (or a built-in table) and the binds your `hyprland.lua` makes, read with a stubbed, read-only `lua` run, so binds made by key code get their keys. |
 | `hooks/herdr-feed` | Python 3, standard library only. Holds Herdr's socket open and prints one JSON line per change. `--once` prints one snapshot; `--demo` plays scripted agents. |
 | `manifest.json` | Omarchy plugin manifest: id, version, entry point and the schema of every setting. |
 | `tests/model.test.js` | Node tests for `Model.js`, plus a check that window titles in `Spaces.qml` render as plain text. |
@@ -19,7 +20,8 @@ How Spaces is put together, how to work on it, and how to release it.
 
 ```text
 Hyprland ──(Quickshell.Hyprland: workspaces, windows, raw events)──► workspaceMap ──► pills, icons, preview card
-hyprctl binds -j ──(at startup, on configreloaded)──► Model.workspaceKeyBinds ──► pill labels, captions, tooltips
+hyprctl binds -j ──(at startup, on configreloaded)──┬──► Model.workspaceKeyBinds ──► pill labels, captions, tooltips
+hooks/bind-keys ──► Model.bindKeyData ──────────────┘
 desktop entries + icon dirs ──► appInfo ──► icon sources, letter tiles
 
 Herdr socket ──► hooks/herdr-feed ──(JSON lines on stdout)──► Model.parseHerdrFeed ──► herdrFeedAgents
@@ -34,7 +36,7 @@ settings panel ──► settingChanged(delta) ──► Model.mergedEntry ─�
 In more detail:
 
 - **Workspaces and windows.** `workspaceMap` is built from `Hyprland.workspaces` and each window's `lastIpcObject` (position, size, floating, PID). Raw Hyprland events such as `openwindow`, `movewindow` and `windowtitle` trigger `Hyprland.refreshToplevels()` after a short debounce, and `revision` is bumped so positions are re-read. `Model.workspaceIds` decides which pills exist, `Model.sortWindows` and `Model.iconItems` decide which icons a pill shows.
-- **Key binds.** A `Process` runs `hyprctl binds -j` at startup and 500 ms after each `configreloaded` event. `Model.workspaceKeyBinds` turns the list into `{ workspace: { switch, move } }`, which feeds `Model.workspaceLabel`, `Model.workspaceCaption` and `Model.keyTooltip`.
+- **Key binds.** Two `Process`es run at startup and 500 ms after each `configreloaded` event, each only if it is not already running: `hyprctl binds -j`, and `hooks/bind-keys` (through `bash`, so nothing starts without `python3`). `Model.bindKeyData` checks the helper's output, and `Model.workspaceKeyBinds` fills in the keys `hyprctl` leaves out from it and turns the list into `{ workspace: { switch, move } }`, which feeds `Model.workspaceLabel`, `Model.workspaceCaption` and `Model.keyTooltip`. Either result arriving recomputes the keys.
 - **Herdr.** The feed runs through a `bash` launcher that exits at once when Herdr's socket or `python3` is missing, so a machine without Herdr never starts Python. Quick silent exits back off with `Model.herdrRetryDelay`. A second process lists `herdr` client processes and their ancestors from `/proc`, and `Model.parseHerdrClients` matches them to window PIDs. `Model.herdrSummary` rolls the agents up into one state for the Herdr window, and `Model.agentChipSummary` counts them for the chip.
 - **Reporter agents.** The `agent` IPC method stores `{ session: { state, pids } }`. `Model.agentStates` gives each one to the nearest window in its PID chain, and `Model.mergeAgentStates` merges that with the Herdr states, most urgent first. A 60 second probe drops live claims whose process has died.
 - **Settings.** The bar injects the widget's `shell.json` entry as `settings`. `cfg` is always `Model.resolveSettings(settings)`, a complete, validated object, so QML never reads a raw value.
@@ -79,7 +81,7 @@ The node tests and the Python syntax check run anywhere; CI runs them on every p
 
 ```sh
 node tests/model.test.js
-python3 -m py_compile hooks/herdr-feed
+python3 -m py_compile hooks/herdr-feed hooks/bind-keys
 ```
 
 `py_compile` writes a cache to `hooks/__pycache__/`; delete it afterwards if you like.

@@ -2,6 +2,18 @@
 
 All notable changes to Spaces. Versions follow [semantic versioning](https://semver.org).
 
+## 2.1.0
+
+### Added
+
+- `hooks/bind-keys`, a small Python 3 script Spaces runs beside `hyprctl binds -j`, at startup and after every config reload. It reads the keymap with `xkbcli` (or a built-in table for the number row and common punctuation) and the binds your `hyprland.lua` makes, through a stubbed, read-only `lua` run as Omarchy's keybindings menu does, so Spaces can find keys that Hyprland lists without one
+
+### Fixed
+
+- Omarchy's stock workspace binds now show their keys. `SUPER + 1` to `SUPER + 0` are made by key code, which Hyprland 0.56 lists with no key, so they were skipped and those pills had no shortcut tooltip. They now read `SUPER + 1` to switch and `SUPER + SHIFT + 1` to move a window. The Number + key caption is still left out when the key just repeats the number
+- Classic binds made by key code, such as `bind = SUPER, code:10, workspace, 1`, show the key (`1`) instead of `code:10`
+- When you bind your own key for a workspace, it wins over Omarchy's number key for that workspace, for both switching and moving. Workspaces you did not rebind keep Omarchy's keys
+
 ## 2.0.0
 
 The first release of Spaces as its own project, `cyperx84.spaces`, built on [omarchy-spaces](https://github.com/tornikegomareli/omarchy-spaces) 1.2.0 by Tornike Gomareli.

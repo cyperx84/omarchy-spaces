@@ -651,11 +651,34 @@ Panel {
   //   { [workspaceId]: { switch: { mods, key } | null, move: { mods, key } | null } }
   property var keyBinds: ({})
   property var bindsLines: []
+  // Parsed `hyprctl binds -j`, and hooks/bind-keys' output: the keymap for
+  // code:N binds and the source keys of Lua binds `hyprctl` lists without one.
+  property var bindsList: []
+  property var bindKeysData: null
+  property var bindKeysLines: []
+  readonly property string bindKeysPath: Model.localPath(Qt.resolvedUrl("hooks/bind-keys"))
+
+  function updateKeyBinds() {
+    root.keyBinds = Model.workspaceKeyBinds(root.bindsList, root.bindKeysData)
+  }
 
   function applyBinds(text) {
     var parsed
     try { parsed = JSON.parse(text) } catch (e) { return }
-    root.keyBinds = Model.workspaceKeyBinds(parsed)
+    root.bindsList = parsed
+    root.updateKeyBinds()
+  }
+
+  function applyBindKeys(text) {
+    var parsed
+    try { parsed = JSON.parse(text) } catch (e) { return }
+    root.bindKeysData = Model.bindKeyData(parsed)
+    root.updateKeyBinds()
+  }
+
+  function scanBinds() {
+    if (!bindsScan.running) bindsScan.running = true
+    if (!bindKeysScan.running) bindKeysScan.running = true
   }
 
   Process {
@@ -670,12 +693,26 @@ Panel {
     }
   }
 
+  Process {
+    id: bindKeysScan
+    // Without python3 there is nothing to add: binds that report their key
+    // still show, as before.
+    command: ["bash", "-c", 'command -v python3 >/dev/null 2>&1 || exit 0; exec python3 "$1"',
+      "spaces-bind-keys", root.bindKeysPath]
+    stdout: SplitParser { onRead: function(line) { root.bindKeysLines.push(line) } }
+    onStarted: root.bindKeysLines = []
+    onExited: function(exitCode) {
+      if (exitCode === 0 && root.bindKeysLines.length > 0) root.applyBindKeys(root.bindKeysLines.join("\n"))
+      root.bindKeysLines = []
+    }
+  }
+
   // A config reload can rebind anything; it also fires several times in a
   // row while the config is being saved.
   Timer {
     id: bindsDebounce
     interval: 500
-    onTriggered: if (!bindsScan.running) bindsScan.running = true
+    onTriggered: root.scanBinds()
   }
 
   // ------------------------------------------------------------ app icons
@@ -782,7 +819,7 @@ Panel {
     // Touching the list starts Quickshell's desktop-entry scan.
     DesktopEntries.applications.values
     iconScan.running = true
-    bindsScan.running = true
+    root.scanBinds()
     Hyprland.refreshToplevels()
     root.syncHerdr()
   }
