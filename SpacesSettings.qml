@@ -133,8 +133,9 @@ Item {
           ToggleSetting { visible: root.cfg.showIcons; label: "Dim unfocused windows"; description: "On the active workspace"; key: "dimUnfocused" }
           ToggleSetting { visible: root.cfg.showIcons; label: "Show focused window title"; description: "Next to its icon"; key: "focusedTitle" }
           SliderSetting { visible: root.cfg.showIcons && root.cfg.focusedTitle; title: "TITLE LENGTH"; key: "titleLength"; minimum: 8; maximum: 60; suffix: " characters" }
-          ToggleSetting { visible: root.cfg.showIcons; label: "Agent status"; description: "Badges on terminals running coding agents"; key: "agentStatus" }
-          ToggleSetting { visible: root.cfg.showIcons && root.cfg.agentStatus; label: "Herdr agents"; description: "Badge terminals running Herdr with its agent status"; key: "herdrAgents" }
+          // Not tied to icons: the agents chip works without them.
+          ToggleSetting { label: "Agent status"; description: "Badges on terminals running coding agents"; key: "agentStatus" }
+          ToggleSetting { visible: root.cfg.agentStatus; label: "Herdr agents"; description: "Badge terminals running Herdr with its agent status"; key: "herdrAgents" }
 
           ChoiceSetting {
             visible: root.cfg.agentStatus && root.cfg.herdrAgents

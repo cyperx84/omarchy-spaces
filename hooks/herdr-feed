@@ -36,9 +36,10 @@ import time
 # can never drift from what Herdr shows. (pane.agent_status_changed needs a
 # pane_id to subscribe, so pane.updated stands in for it.)
 EVENTS = [
-    "workspace.updated", "pane.updated", "pane.created", "pane.closed",
-    "pane.exited", "pane.agent_detected", "workspace.closed",
-    "workspace.renamed",
+    "workspace.created", "workspace.updated", "workspace.renamed",
+    "workspace.moved", "workspace.reordered", "workspace.closed",
+    "pane.created", "pane.updated", "pane.moved", "pane.closed",
+    "pane.exited", "pane.agent_detected",
 ]
 # The stream spells kinds with underscores (pane_updated); compare that way.
 RELEVANT = {kind.replace(".", "_") for kind in EVENTS}
@@ -46,6 +47,9 @@ RELEVANT = {kind.replace(".", "_") for kind in EVENTS}
 # Events arrive in bursts (subscribing alone replays a backlog). The first
 # event opens a short window; everything inside it shares one snapshot.
 DEBOUNCE = 0.15
+# A working agent updates its pane about ten times a second (the title
+# spinner), so snapshots are also kept at least this far apart.
+MIN_GAP = 1.0
 
 
 def socket_path():
@@ -72,25 +76,33 @@ def snapshot():
         reader = sock.makefile("rb")
         for line in reader:
             reply = json.loads(line)
-            if reply.get("id") != "spaces-snapshot":
+            if not isinstance(reply, dict) or reply.get("id") != "spaces-snapshot":
                 continue
-            result = reply.get("result") or {}
-            return result.get("snapshot")
+            result = reply.get("result")
+            snap = result.get("snapshot") if isinstance(result, dict) else None
+            return snap if isinstance(snap, dict) else None
     return None
 
 
+def dicts(items):
+    # The objects in `items`, or none when it is not a list: the reply comes
+    # from another program, so nothing about its shape is taken on trust.
+    return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+
+
 def normalize(snap):
-    workspaces = {w.get("workspace_id"): w for w in snap.get("workspaces") or []}
+    workspaces = {w.get("workspace_id"): w for w in dicts(snap.get("workspaces"))}
     # Only the agents list carries Herdr's change counter, not the panes.
-    changes = {a.get("pane_id"): a.get("state_change_seq") for a in snap.get("agents") or []}
+    changes = {a.get("pane_id"): a.get("state_change_seq") for a in dicts(snap.get("agents"))}
     agents = []
-    for pane in snap.get("panes") or []:
+    for pane in dicts(snap.get("panes")):
         status = pane.get("agent_status") or "unknown"
         # A plain shell pane: nothing for the bar to say about it.
         if pane.get("agent") is None and status == "unknown":
             continue
         workspace = workspaces.get(pane.get("workspace_id")) or {}
-        session = pane.get("agent_session") or {}
+        session = pane.get("agent_session")
+        session = session if isinstance(session, dict) else {}
         agents.append({
             "pane_id": pane.get("pane_id"),
             "workspace_id": pane.get("workspace_id"),
@@ -139,6 +151,7 @@ def watch(printer):
              {"subscriptions": [{"type": kind} for kind in EVENTS]})
         # Subscribe before the first snapshot so no change slips in between.
         snap = snapshot()
+        last = time.monotonic()
         if snap is not None:
             printer.emit(snap)
         buffer = b""
@@ -153,10 +166,11 @@ def watch(printer):
                 lines = (buffer + chunk).split(b"\n")
                 buffer = lines.pop()
                 if due is None and any(relevant(line) for line in lines):
-                    due = time.monotonic() + DEBOUNCE
+                    due = max(time.monotonic() + DEBOUNCE, last + MIN_GAP)
             if due is not None and time.monotonic() >= due:
                 due = None
                 snap = snapshot()
+                last = time.monotonic()
                 if snap is not None:
                     printer.emit(snap)
 
@@ -172,11 +186,10 @@ def main():
                 printer.emit(snap)
         else:
             watch(printer)
-    except (OSError, ValueError):
-        # Missing or refused socket, or Herdr went away mid-request: say
-        # nothing. The widget retries on its own schedule.
-        pass
-    except KeyboardInterrupt:
+    except (Exception, KeyboardInterrupt):
+        # Missing or refused socket, Herdr going away mid-request, or a reply
+        # of a shape this script does not know: say nothing. The widget
+        # retries on its own schedule.
         pass
     return 0
 

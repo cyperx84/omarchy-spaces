@@ -78,8 +78,12 @@ Window {
       equal(find(form, "key", "iconSize").visible, false)
       mouseClick(find(form, "text", "Windows"))
       wait(50)
+      // Agent settings stay reachable with icons off: the chip needs none.
       var herdr = find(form, "key", "herdrAgents")
-      equal(herdr.visible, false)
+      equal(herdr.visible, true)
+      equal(find(form, "key", "agentStatus").visible, true)
+      equal(find(form, "key", "agentChip").visible, true)
+      equal(find(form, "key", "groupApps").visible, false)
       form.cfg = Model.resolveSettings({})
       wait(50)
       equal(herdr.visible, true)

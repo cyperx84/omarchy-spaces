@@ -569,6 +569,23 @@ function herdrStatesByPid(hostPids, summary) {
   return out
 }
 
+// How long to wait before starting the feed again. A feed that ends at once
+// (Herdr not running) backs off from 5 s to a minute; `quickExits` counts
+// those in a row and starts over once the feed says anything.
+function herdrRetryDelay(quickExits) {
+  var n = Math.min(Math.max(0, Math.floor(Number(quickExits) || 0)), 4)
+  return Math.min(60000, 5000 * Math.pow(2, n))
+}
+
+// The feed's panes and focus as one comparable value. When it changes, a
+// Herdr client may have come or gone, so the client probe runs again.
+function herdrFeedKey(agents) {
+  var keys = []
+  for (var i = 0; i < (agents || []).length; i++)
+    if (agents[i]) keys.push(agents[i].pane_id + (agents[i].focused ? "*" : ""))
+  return keys.sort().join(",")
+}
+
 // Tooltip lines under a Herdr window's title, one per agent:
 // "working · Code · omarchy-spaces custom version".
 function herdrTooltipLines(agents, maxTitle) {
@@ -633,6 +650,15 @@ function herdrHostAddress(windows, hostPids) {
     if (w && w.pid && (hostPids || []).indexOf(w.pid) !== -1) return w.address
   }
   return ""
+}
+
+// The same, looked up over `windows` from every monitor: with one bar per
+// monitor, the Herdr window may live on another one. `clientText` is the
+// client probe's output, matched against these windows' PIDs.
+function herdrHostAnywhere(windows, clientText) {
+  var pids = {}
+  for (var i = 0; i < (windows || []).length; i++) if (windows[i] && windows[i].pid) pids[windows[i].pid] = true
+  return herdrHostAddress(windows, parseHerdrClients(clientText, pids))
 }
 
 // ---- Key binds
@@ -792,7 +818,8 @@ if (typeof module !== "undefined") {
     herdrAcks: herdrAcks, parseHerdrClients: parseHerdrClients, herdrStatesByPid: herdrStatesByPid,
     herdrTooltipLines: herdrTooltipLines, localPath: localPath,
     agentChipSummary: agentChipSummary, agentChipSegments: agentChipSegments, sortAgents: sortAgents,
-    herdrHostAddress: herdrHostAddress,
+    herdrHostAddress: herdrHostAddress, herdrHostAnywhere: herdrHostAnywhere,
+    herdrRetryDelay: herdrRetryDelay, herdrFeedKey: herdrFeedKey,
     previewWidth: previewWidth, previewDimensions: previewDimensions, monitorArea: monitorArea, previewLayout: previewLayout, durationFor: durationFor,
     workspaceIds: workspaceIds, workspaceLabel: workspaceLabel, workspaceCaption: workspaceCaption, appKey: appKey,
     modNames: modNames, keyDisplay: keyDisplay, workspaceKeyBinds: workspaceKeyBinds, keyHintText: keyHintText,

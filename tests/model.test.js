@@ -461,6 +461,21 @@ test("herdrTooltipLines lists status, workspace and title", () => {
   ], 10), ["working · Code · omarchy-s…", "blocked · a very lo…", "unknown · Notes"])
 })
 
+test("herdrRetryDelay backs off from 5 s to a minute", () => {
+  assert.deepStrictEqual([0, 1, 2, 3, 4, 9].map(M.herdrRetryDelay), [5000, 10000, 20000, 40000, 60000, 60000])
+  assert.strictEqual(M.herdrRetryDelay(undefined), 5000)
+  assert.strictEqual(M.herdrRetryDelay(-3), 5000)
+})
+
+test("herdrFeedKey changes with panes and focus, not titles or order", () => {
+  const a = [{ pane_id: "w1:p2", focused: false, title: "x" }, { pane_id: "w1:p1", focused: true, title: "y" }]
+  assert.strictEqual(M.herdrFeedKey(a), "w1:p1*,w1:p2")
+  assert.strictEqual(M.herdrFeedKey([a[1], Object.assign({}, a[0], { title: "z", status: "done" })]), M.herdrFeedKey(a))
+  assert.notStrictEqual(M.herdrFeedKey([a[0]]), M.herdrFeedKey(a))
+  assert.notStrictEqual(M.herdrFeedKey([a[0], Object.assign({}, a[1], { focused: false })]), M.herdrFeedKey(a))
+  assert.strictEqual(M.herdrFeedKey(undefined), "")
+})
+
 test("agentChip setting validates", () => {
   assert.strictEqual(M.resolveSettings({}).agentChip, "auto")
   assert.strictEqual(M.resolveSettings({ agentChip: "always" }).agentChip, "always")
@@ -510,6 +525,14 @@ test("herdrHostAddress picks the first window hosting Herdr", () => {
   assert.strictEqual(M.herdrHostAddress(windows, [30]), "")
   assert.strictEqual(M.herdrHostAddress([{ address: "z", pid: 0 }], [0]), "")
   assert.strictEqual(M.herdrHostAddress(undefined, [10]), "")
+})
+
+test("herdrHostAnywhere finds the Herdr window among all windows", () => {
+  const windows = [{ address: "a", pid: 10 }, { address: "b", pid: 20 }, { address: "c", pid: 0 }]
+  assert.strictEqual(M.herdrHostAnywhere(windows, "500,20,1"), "b")
+  assert.strictEqual(M.herdrHostAnywhere(windows, "500,30,1"), "")
+  assert.strictEqual(M.herdrHostAnywhere(windows, ""), "")
+  assert.strictEqual(M.herdrHostAnywhere(undefined, "500,20,1"), "")
 })
 
 test("localPath decodes file URLs", () => {

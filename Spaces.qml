@@ -112,8 +112,9 @@ Panel {
 
   // ------------------------------------------------------------ agents
 
-  // Coding agents report in through reporter hooks (for example,
-  // hooks/claude-hook):
+  // Any coding agent can report in through the IPC method
+  // agent(session, state, pids); Herdr's agents come from hooks/herdr-feed
+  // instead (see below). Reports land here as:
   //   { [session]: { state: "working" | "waiting" | "done" | "idle", pids: [...] } }
   // Reporters are trusted for their own lifecycle, but not forever: a crashed
   // reporter never sends "end", so live claims are rechecked against /proc.
@@ -255,6 +256,8 @@ Panel {
     function onActiveToplevelChanged() {
       Qt.callLater(root.acknowledgeAgents)
       Qt.callLater(root.acknowledgeHerdr)
+      // Cheap, and catches a Herdr client started in an open terminal.
+      if (root.herdrWanted) herdrProbeDebounce.restart()
     }
   }
 
@@ -287,6 +290,12 @@ Panel {
   property var herdrClientLines: []
   // { pane_id: true } for finished panes already seen.
   property var herdrAcked: ({})
+  // Panes and focus of the last feed line; see Model.herdrFeedKey.
+  property string herdrFeedKey: ""
+  // Feed runs in a row that ended at once without a word; they back off.
+  property int herdrQuickExits: 0
+  property real herdrFeedStarted: 0
+  property bool herdrFeedSpoke: false
 
   // [{ pane_id, workspace_id, workspace_label, workspace_number, tab_id,
   //    agent, status, title, focused, session }], as hooks/herdr-feed sends it.
@@ -321,12 +330,21 @@ Panel {
       root.herdrFeedAgents = []
       root.herdrClientText = ""
       root.herdrAcked = ({})
+      root.herdrFeedKey = ""
+      root.herdrQuickExits = 0
     }
   }
 
   function applyHerdrFeed(line) {
     var agents = Model.parseHerdrFeed(line)
     if (!agents) return
+    root.herdrFeedSpoke = true
+    // New or closed panes, or focus moving, can mean a client came or went.
+    var key = Model.herdrFeedKey(agents)
+    if (key !== root.herdrFeedKey) {
+      root.herdrFeedKey = key
+      herdrProbeDebounce.restart()
+    }
     // Finishing in the window you are looking at needs no check mark.
     root.herdrAcked = Model.herdrAcks(agents, root.herdrAcked, root.viewingHerdr())
     root.herdrFeedAgents = agents
@@ -349,13 +367,27 @@ Panel {
 
   Process {
     id: herdrFeed
-    // bash first, so a machine without python3 stays as quiet as one
-    // without Herdr: the feed simply exits and is retried.
-    command: ["bash", "-c", 'command -v python3 >/dev/null 2>&1 || exit 0; exec python3 "$1"', "spaces-herdr-feed", root.herdrFeedPath]
+    // bash first, so a machine without Herdr's socket or without python3
+    // never starts an interpreter: the feed simply exits and is retried.
+    command: ["bash", "-c", [
+      's=${HERDR_SOCKET_PATH:-$HOME/.config/herdr/herdr.sock};',
+      '[[ -S $s ]] || exit 0;',
+      'command -v python3 >/dev/null 2>&1 || exit 0;',
+      'exec python3 "$1"'
+    ].join(" "), "spaces-herdr-feed", root.herdrFeedPath]
     stdout: SplitParser { onRead: function(line) { root.applyHerdrFeed(line) } }
+    onStarted: {
+      root.herdrFeedStarted = Date.now()
+      root.herdrFeedSpoke = false
+    }
     onExited: {
-      // Herdr is gone (or never was): no stale badges, and try again later.
+      // Herdr is gone (or never was): no stale badges, and try again later,
+      // less often each time it is still not there.
       root.herdrFeedAgents = []
+      root.herdrFeedKey = ""
+      var quick = !root.herdrFeedSpoke && Date.now() - root.herdrFeedStarted < 2000
+      root.herdrQuickExits = quick ? root.herdrQuickExits + 1 : 0
+      herdrRetry.interval = Model.herdrRetryDelay(root.herdrQuickExits)
       if (root.herdrWanted) herdrRetry.restart()
     }
   }
@@ -389,6 +421,11 @@ Panel {
     onStarted: root.herdrClientLines = []
     onExited: {
       if (root.herdrWanted) root.herdrClientText = root.herdrClientLines.join("\n")
+      // A client means a server: no need to sit out the feed's back-off.
+      if (root.herdrWanted && root.herdrClientLines.length > 0 && !herdrFeed.running) {
+        herdrRetry.stop()
+        herdrFeed.running = true
+      }
       root.herdrClientLines = []
     }
   }
@@ -739,6 +776,14 @@ Panel {
     var ids = Object.keys(root.workspaceMap).sort(function(l, r) { return Number(l) - Number(r) })
     for (var i = 0; i < ids.length; i++) windows = windows.concat(root.workspaceMap[ids[i]].windows)
     var address = Model.herdrHostAddress(windows, root.herdrWindowPids)
+    // With one bar per monitor, the Herdr window may be on another monitor.
+    if (!address) {
+      var all = Hyprland.toplevels.values.map(function(tl) {
+        var ipc = tl.lastIpcObject || {}
+        return { address: String(tl.address), pid: ipc.pid || 0 }
+      })
+      address = Model.herdrHostAnywhere(all, root.herdrClientText)
+    }
     if (address) root.focusWindow(address)
     root.closeAgents()
     root.hidePreview()
@@ -1363,7 +1408,7 @@ Panel {
 
       width: implicitWidth
       height: implicitHeight
-      implicitWidth: root.vertical ? root.pillThickness : chipContent.implicitWidth + pad * 2
+      implicitWidth: root.vertical ? Math.max(root.pillThickness, chipContent.implicitWidth + Style.space(2)) : chipContent.implicitWidth + pad * 2
       implicitHeight: root.vertical ? chipContent.implicitHeight + pad * 2 : root.pillThickness
 
       Behavior on implicitWidth { enabled: root.dur > 0; NumberAnimation { duration: root.dur; easing.type: Easing.OutCubic } }
@@ -1425,12 +1470,16 @@ Panel {
         Repeater {
           model: root.agentSegments
 
-          delegate: Row {
+          // Count beside its badge, or above it in a vertical bar so two
+          // digits still fit the bar's width.
+          delegate: Grid {
             required property var modelData
+            columns: root.vertical ? 1 : 2
+            horizontalItemAlignment: Grid.AlignHCenter
+            verticalItemAlignment: Grid.AlignVCenter
             spacing: Style.space(2)
 
             Text {
-              anchors.verticalCenter: parent.verticalCenter
               text: String(modelData.count)
               color: agentChip.textColor
               font.family: root.fontFamily
@@ -1439,7 +1488,6 @@ Panel {
             }
 
             AgentBadge {
-              anchors.verticalCenter: parent.verticalCenter
               visible: modelData.state !== ""
               agentState: modelData.state
               width: Math.max(8, Math.round(root.iconPx * 0.6))
