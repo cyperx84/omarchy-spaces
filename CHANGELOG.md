@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.0.0
+
+Fork by cyperx84 of tornikegomareli/omarchy-spaces.
+
+- Agent status comes from Herdr: "Badge Herdr terminals from Herdr's own agent
+  status". The widget runs `hooks/herdr-feed`, and the window hosting Herdr
+  gets the badge with a tooltip line per agent. New `herdrAgents` setting
+- Agents chip and list: "Add a Herdr agents chip, an agents list and agent
+  rows in previews". Counts after the pills, a card to jump to an agent, and
+  agent rows in the preview of the Herdr workspace. New `agentChip` setting
+- Workspace keys: "Show each workspace's key from the live Hyprland binds".
+  Label style gains `key` and `both`, and `both` is the new default. New
+  "Shortcut tooltips" setting. App icon and gear tooltips now show; they
+  never did before
+- Review fixes: "Fix review findings in the Herdr feed, agents chip and
+  settings". The feed backs off while Herdr is absent, takes snapshots at
+  most once a second, and the agent toggles no longer depend on app icons
+- Removed: the Claude Code, OpenCode and omp reporters. The
+  `omarchy-shell cyperx84.spaces agent` reporter remains for other agents
+- Fixed the settings test, which clicked into a page before it had laid out
+- Forked as `cyperx84.spaces` (see "Fork as cyperx84.spaces and drop the
+  per-agent hook reporters")
+
+## Upstream history
+
 ## 1.2.0
 
 - Agent status for omp (oh-my-pi): add `hooks/omp-extension.js` to your omp

@@ -1,5 +1,7 @@
 <h1 align="center">Spaces</h1>
 
+<p align="center">cyperx84's fork of <a href="https://github.com/tornikegomareli/omarchy-spaces">tornikegomareli/omarchy-spaces</a>. It swaps the per-agent hooks for a Herdr agent feed with an agents chip, and shows workspace keys read from your Hyprland binds.</p>
+
 <h3 align="center">See what runs on every workspace.</h3>
 
 <p align="center">
@@ -20,59 +22,38 @@ Previews follow the monitor's orientation, including portrait displays, and shri
 
 ## Know when your agent needs you
 
-Terminals running Claude Code get a badge: a spinner while the agent works, a pulsing `!` when it needs your input, and a check mark when it is done. A workspace with an agent waiting on you pulses too. If a reporting process dies without sending `end`, the bar clears its live badge after the next process check, normally within a minute.
+Herdr already knows what every coding agent in its panes is doing, so Spaces listens to Herdr instead of to a hook per agent. The window hosting [Herdr](https://herdr.dev) gets a badge: a spinner while an agent works, a pulsing `!` when it is blocked on you, and a check mark when it is done. A workspace with an agent waiting on you pulses too. Hovering the icon lists each agent and its state.
+
+This needs Herdr running. With Herdr missing or stopped, nothing is shown and nothing errors. The badge goes on the window that runs the `herdr` client, found as the terminal that is its parent. With several Herdr windows, each shows the combined state of every agent, and a terminal that runs several windows in one process may badge all of them.
 
 <p align="center">
   <img src=".github/assets/film-agent.png" width="100%" alt="A terminal icon on workspace 4 with an orange exclamation badge: the agent needs input" />
 </p>
 
-To turn it on, add these hooks to `~/.claude/settings.json`:
+*The badge as it looked in the upstream film, fed by a Claude Code hook. The Herdr feed draws the same badge.*
 
-```json
-{
-  "hooks": {
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "~/.config/omarchy/plugins/cyperx84.spaces/hooks/claude-hook working", "async": true }] }],
-    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "~/.config/omarchy/plugins/cyperx84.spaces/hooks/claude-hook working", "async": true }] }],
-    "Notification": [{ "hooks": [{ "type": "command", "command": "~/.config/omarchy/plugins/cyperx84.spaces/hooks/claude-hook waiting", "async": true }] }],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "~/.config/omarchy/plugins/cyperx84.spaces/hooks/claude-hook done", "async": true }] }],
-    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "~/.config/omarchy/plugins/cyperx84.spaces/hooks/claude-hook end", "async": true }] }]
-  }
-}
-```
+### Agents chip
 
-Other agents can report the same way: `omarchy-shell cyperx84.spaces agent <session> <working|waiting|done|end> <pids>`, where `<pids>` lists the agent's process and its parents, comma-separated.
+After the workspace pills, an agents chip counts what Herdr is running: waiting agents with `!`, working ones with the spinner, done ones with a check mark, or a plain total when everything is idle. It pulses while an agent waits. Hover it for the list. Click it to open a card with one row per agent, newest change first, showing its Herdr workspace, title and agent name. Click a row to focus that agent's pane in Herdr and its window in Hyprland.
 
-### OpenCode
+The preview of a workspace that holds the Herdr window also gets up to five agent rows, clickable the same way, with a "+N more in Herdr" line beyond that.
 
-`hooks/opencode-plugin.js` is an OpenCode plugin that reports for you, so a terminal running OpenCode gets the same badge a Claude Code terminal gets. It reports through the `omarchy-shell` command above, so nothing else is needed.
+Two settings control this, both under Windows:
 
-To turn it on, link it into OpenCode's plugins folder:
+- `herdrAgents` (default on) turns the feed and every Herdr badge on or off. It needs `agentStatus`, which is also on by default.
+- `agentChip` is `auto` (default: show the chip while an agent works or waits), `always` (whenever Herdr lists an agent) or `never`.
 
-```sh
-mkdir -p ~/.config/opencode/plugins
-ln -sfn ~/.config/omarchy/plugins/cyperx84.spaces/hooks/opencode-plugin.js \
-        ~/.config/opencode/plugins/spaces.js
-```
+The feed is `hooks/herdr-feed`, a stdlib Python 3 script that the widget starts and restarts itself. Run `hooks/herdr-feed --once` to see the JSON it reads.
 
-The link points into the installed plugin, so `omarchy plugin update cyperx84.spaces` updates the reporter too. Restart OpenCode, run a prompt, and the terminal icon spins in the bar while it works and gets a check mark when it stops.
+Agents outside Herdr can still report in through `omarchy-shell cyperx84.spaces agent <session> <working|waiting|done|end> <pids>`, where `<pids>` lists the agent's process and its parents, comma-separated. This repo no longer ships hooks that call it.
 
-`working` and `done` are reported as OpenCode works. `waiting` needs a permission prompt, so with `--auto` it rarely appears: OpenCode answers its own permission requests in milliseconds, and the plugin waits 1.5s before showing a `!` so a prompt answered instantly never flashes. To see it, run `opencode` without `--auto` and ask it to do something that needs approval.
+## Key hints
 
-### omp
+Each workspace pill can show the key that reaches it. Spaces reads `hyprctl binds -j`, so it follows whatever bindings you have, not a fixed layout: SUPER+J for workspace 1 shows a `J`. It understands both classic `workspace` binds and Omarchy's Lua binds, by their "Switch to workspace N" description. Binds in a submap, mouse binds, and Lua entries with no key are skipped, and a workspace with no bind shows only its number.
 
-`hooks/omp-extension.js` is an [oh-my-pi](https://github.com/can1357/oh-my-pi) extension that reports for you, so a terminal running `omp` gets the same badge a Claude Code terminal gets. It reports through the `omarchy-shell` command above, so nothing else is needed.
+Under Appearance, Workspace label is `Number`, `Key`, `Number + key` (default), `Glyph` or `None`. In the combined style the key is a smaller caption after the number, or under it in a vertical bar, and is left off when it only repeats the number.
 
-To turn it on, add it to your omp config:
-
-```yaml
-# ~/.omp/agent/config.yml
-extensions:
-  - ~/.config/omarchy/plugins/cyperx84.spaces/hooks/omp-extension.js
-```
-
-Restart `omp`, run a prompt, and the terminal icon spins in the bar while it works and gets a check mark when it stops.
-
-`working` and `done` are reported as omp works. `waiting` appears when a tool needs approval — in non-yolo mode (`tools.approvalMode: write` or `always-ask`) or when the agent calls the `ask` tool — and waits 1.5s before showing a `!` so a prompt answered instantly never flashes. Two limits are worth knowing: dialogs opened by *other* extensions through `ctx.ui.confirm` or `ctx.ui.select` cannot be observed and never show a badge, and only the main session reports, because subagents share the parent process.
+Hover a pill for a tooltip such as "Workspace 1 · SUPER + J to switch · ALT + SHIFT + J to move window here". The "Shortcut tooltips" setting under Behaviour (`keyTooltips`) turns it off. Binds are read at startup and again half a second after a Hyprland config reload.
 
 ## Install
 
@@ -84,8 +65,7 @@ omarchy plugin disable omarchy.workspaces   # optional: replace the built-in swi
 Requirements:
 
 - Omarchy 4 with the Quickshell bar (Hyprland 0.56 or newer)
-- `jq` for the agent hook (installed with Omarchy)
-- Claude Code, OpenCode, or omp, only for agent status
+- [Herdr](https://herdr.dev) and `python3`, only for agent status
 
 Works with the bar on any edge of the screen. Tested on a single monitor.
 
@@ -103,19 +83,14 @@ omarchy plugin remove cyperx84.spaces
 omarchy plugin enable omarchy.workspaces   # bring back the built-in switcher
 ```
 
-If you added the agent hooks or the settings key below, delete those lines from `~/.claude/settings.json` and `~/.config/hypr/bindings.lua`. If you linked the OpenCode plugin, remove the link:
-
-```sh
-rm ~/.config/opencode/plugins/spaces.js
-```
-
-If you added the omp extension line, delete it from `~/.omp/agent/config.yml`, or omp will keep loading a path that no longer exists.
+If you added the key binding below, delete it from `~/.config/hypr/bindings.lua`.
 
 ## Using it
 
 - Click a workspace to go there. Click an icon to focus that window.
 - Scroll over the widget to move between workspaces.
-- Hover an icon to see the window title.
+- Hover an icon to see the window title, and a workspace to see its keys.
+- With Herdr running, click the agents chip to list agents and jump to one.
 - Hover another workspace to preview it. Click a window in the preview to focus it.
 - Right-click the widget to open settings. An optional gear can be enabled under Appearance → Settings button; it stays in a fixed slot before the workspaces.
 
@@ -155,14 +130,12 @@ From a clone of this repository, link it into Omarchy and run the tests:
 ln -sfn "$PWD" ~/.config/omarchy/plugins/cyperx84.spaces
 omarchy plugin enable cyperx84.spaces
 node tests/model.test.js
-node tests/opencode-plugin.test.js
-node tests/omp-extension.test.js
 bash tests/settings.sh
 # Optional: opens a temporary Wayland window to test the settings gear
 bash tests/gear.sh
 ```
 
-After code changes, run `omarchy restart shell`.
+Pure logic lives in `Model.js` and is tested with node; `tests/settings.sh` runs the settings panel offscreen. Neither loads the bar widget itself. After code changes, run `omarchy restart shell`.
 
 ## License
 
