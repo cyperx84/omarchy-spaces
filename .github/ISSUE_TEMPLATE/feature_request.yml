@@ -1,0 +1,33 @@
+name: Feature request
+description: Suggest an improvement to Spaces.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Spaces is a workspace switcher for the Omarchy bar, with agent status and key hints. [CONTRIBUTING.md](https://github.com/cyperx84/omarchy-spaces/blob/main/CONTRIBUTING.md#scope) describes what fits the project.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: How you picture it working. Sketches or screenshots of similar features are welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Settings, scripts or other widgets you tried.
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contributing
+      options:
+        - label: I would like to work on this myself.

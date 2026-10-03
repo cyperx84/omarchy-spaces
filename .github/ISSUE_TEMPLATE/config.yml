@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Troubleshooting guide
+    url: https://github.com/cyperx84/omarchy-spaces/blob/main/docs/troubleshooting.md
+    about: Fixes for the most common problems, such as missing agent badges or key captions.

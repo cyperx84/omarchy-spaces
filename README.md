@@ -1,80 +1,161 @@
 <h1 align="center">Spaces</h1>
 
-<p align="center">cyperx84's fork of <a href="https://github.com/tornikegomareli/omarchy-spaces">tornikegomareli/omarchy-spaces</a>. It swaps the per-agent hooks for a Herdr agent feed with an agents chip, and shows workspace keys read from your Hyprland binds.</p>
-
-<h3 align="center">See what runs on every workspace.</h3>
+<p align="center">A workspace switcher for the Omarchy bar that shows the apps on every workspace, the keys that reach it, and what your coding agents are doing.</p>
 
 <p align="center">
-  <img src=".github/assets/film-apps.png" width="100%" alt="The Omarchy bar with Spaces: five workspaces, each showing the app icons open on it" />
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT" /></a>
+  <a href="https://omarchy.org"><img src="https://img.shields.io/badge/Omarchy-4-black" alt="Omarchy 4" /></a>
+  <a href="https://hypr.land"><img src="https://img.shields.io/badge/Hyprland-0.56%2B-58e1ff" alt="Hyprland 0.56 or newer" /></a>
+  <a href="https://github.com/cyperx84/omarchy-spaces/actions/workflows/test.yml"><img src="https://github.com/cyperx84/omarchy-spaces/actions/workflows/test.yml/badge.svg" alt="Test status" /></a>
 </p>
-
-Spaces is a workspace switcher for the [Omarchy](https://omarchy.org) bar. Each workspace shows the icons of the apps open on it. The active one slides open, and the focused window is highlighted.
-
-## Peek before you jump
-
-Hover another workspace to see it live, laid out the way it is on screen. Click a window in the preview to jump to it.
-
-Previews follow the monitor's orientation, including portrait displays, and shrink to fit the available screen space while keeping the full workspace visible. The size setting controls the longest side, so portrait and landscape previews have a comparable size.
 
 <p align="center">
-  <img src=".github/assets/film-preview.png" width="100%" alt="Hovering workspace 2 opens a live preview with omarchy.org and Neovim side by side" />
+  <img src=".github/assets/hero.png" width="100%" alt="The Omarchy bar with Spaces: workspace pills showing a number and a small key caption, the app icons open on each workspace, a spinner badge on the terminal running Herdr, and the agents chip with agent counts after the pills" />
 </p>
 
-## Know when your agent needs you
+Spaces replaces Omarchy's built-in workspace switcher. Each workspace is a pill in the bar that shows the icons of the apps open on it, and the active pill slides open to show them. Hover a pill to see a live miniature of that workspace, and read its shortcut from your own Hyprland binds. If you run coding agents in [Herdr](https://herdr.dev), the terminal hosting Herdr gets a badge for what they are doing, and an agents chip lists every agent so you can jump to the one that needs you.
 
-Herdr already knows what every coding agent in its panes is doing, so Spaces listens to Herdr instead of to a hook per agent. The window hosting [Herdr](https://herdr.dev) gets a badge: a spinner while an agent works, a pulsing `!` when it is blocked on you, and a check mark when it is done. A workspace with an agent waiting on you pulses too. Hovering the icon lists each agent and its state.
+Spaces started as [omarchy-spaces](https://github.com/tornikegomareli/omarchy-spaces) by Tornike Gomareli. See [Credits](#credits).
 
-This needs Herdr running. With Herdr missing or stopped, nothing is shown and nothing errors. The badge goes on the window that runs the `herdr` client, found as the terminal that is its parent. With several Herdr windows, each shows the combined state of every agent, and a terminal that runs several windows in one process may badge all of them.
+## Features
+
+### Workspace pills with app icons
+
+Each workspace is a pill labelled with its number. The active pill, and any pill you hover, shows the icon of every window on that workspace, ordered the way they sit on screen. The focused window is highlighted, and the others on the active workspace are dimmed. Click a pill to go to that workspace, click an icon to focus that window, and scroll over the bar to step through workspaces. Icons come from your desktop entries and icon theme, including Chromium web apps. An app with no icon gets a letter tile.
+
+### Live previews
 
 <p align="center">
-  <img src=".github/assets/film-agent.png" width="100%" alt="A terminal icon on workspace 4 with an orange exclamation badge: the agent needs input" />
+  <img src=".github/assets/preview.gif" width="100%" alt="Moving the pointer along the workspace pills: a preview card opens under the bar with a live miniature of each workspace, its windows laid out where they are on screen, and slides from pill to pill" />
 </p>
 
-*The badge as it looked in the upstream film, fed by a Claude Code hook. The Herdr feed draws the same badge.*
+Hover a pill for another workspace and a preview card opens with a live miniature of it, each window where it really is on screen. Move along the bar and the card slides from pill to pill. Click a window in the miniature to jump to it. Previews follow the monitor's orientation, so portrait and rotated displays work too.
 
-### Agents chip
+### Agent status from Herdr
 
-After the workspace pills, an agents chip counts what Herdr is running: waiting agents with `!`, working ones with the spinner, done ones with a check mark, or a plain total when everything is idle. It pulses while an agent waits. Hover it for the list. Click it to open a card with one row per agent, newest change first, showing its Herdr workspace, title and agent name. Click a row to focus that agent's pane in Herdr and its window in Hyprland.
+<p align="center">
+  <img src=".github/assets/agents.gif" width="100%" alt="The agents chip after the workspace pills counts waiting, working and done agents. Clicking it opens a popup listing each agent with its status badge, Herdr workspace, title and agent name, and the badges change as agents start working, get blocked and finish" />
+</p>
 
-The preview of a workspace that holds the Herdr window also gets up to five agent rows, clickable the same way, with a "+N more in Herdr" line beyond that.
+[Herdr](https://herdr.dev) is a terminal multiplexer for coding agents, and it already knows what every agent in its panes is doing. Spaces listens to it. The terminal window running Herdr gets a badge: a spinner while an agent works, a pulsing `!` when one is blocked on you, and a check mark when one is done. A workspace with a blocked agent pulses until you go there.
 
-Two settings control this, both under Windows:
+After the pills, the agents chip counts waiting, working and done agents. Click it for a popup with one row per agent, newest change first. Click a row to focus that agent's pane in Herdr and the Herdr window in Hyprland. Without Herdr, none of this shows and nothing breaks. See [docs/agents.md](docs/agents.md).
 
-- `herdrAgents` (default on) turns the feed and every Herdr badge on or off. It needs `agentStatus`, which is also on by default.
-- `agentChip` is `auto` (default: show the chip while an agent works or waits), `always` (whenever Herdr lists an agent) or `never`.
+### Key hints from your own binds
 
-The feed is `hooks/herdr-feed`, a stdlib Python 3 script that the widget starts and restarts itself. Run `hooks/herdr-feed --once` to see the JSON it reads.
+<p align="center">
+  <img src=".github/assets/key-hints.png" width="100%" alt="The same row of workspace pills in four label styles, stacked top to bottom: Number + key, with a small key caption after each number; Key, showing only the bound key; Number; and Glyph, where the focused workspace shows a glyph instead of its number" />
+</p>
 
-Agents outside Herdr can still report in through `omarchy-shell cyperx84.spaces agent <session> <working|waiting|done|end> <pids>`, where `<pids>` lists the agent's process and its parents, comma-separated. This repo no longer ships hooks that call it.
+Spaces reads `hyprctl binds -j` and works out which key switches to each workspace, so the pill can show it. If `SUPER + J` takes you to workspace 1, its pill reads `1` with a small `J`. It follows whatever you have bound, either Omarchy's Lua binds or classic `workspace` binds, and reads them again when Hyprland reloads its config. Hover a pill for a tooltip that names the keys to switch there and to move a window there. See [docs/key-hints.md](docs/key-hints.md).
 
-## Key hints
+### Settings panel
 
-Each workspace pill can show the key that reaches it. Spaces reads `hyprctl binds -j`, so it follows whatever bindings you have, not a fixed layout: SUPER+J for workspace 1 shows a `J`. It understands both classic `workspace` binds and Omarchy's Lua binds, by their "Switch to workspace N" description. Binds in a submap, mouse binds, and Lua entries with no key are skipped, and a workspace with no bind shows only its number.
+<img src=".github/assets/settings.png" width="330" align="right" alt="The Spaces settings panel: a list of pages on the left (App icons, Windows, Appearance, Workspaces, Previews, Behaviour) and the controls of the selected page on the right, with a reset button at the bottom" />
 
-Under Appearance, Workspace label is `Number`, `Key`, `Number + key` (default), `Glyph` or `None`. In the combined style the key is a smaller caption after the number, or under it in a vertical bar, and is left off when it only repeats the number.
+Right-click the widget to open its settings. Six pages cover app icons, windows and agents, appearance, workspaces, previews and behaviour. Changes apply as you click and are saved to `~/.config/omarchy/shell.json`.
 
-Hover a pill for a tooltip such as "Workspace 1 · SUPER + J to switch · ALT + SHIFT + J to move window here". The "Shortcut tooltips" setting under Behaviour (`keyTooltips`) turns it off. Binds are read at startup and again half a second after a Hyprland config reload.
+The panel works from the keyboard: Tab and Shift+Tab move between controls, Enter or Space activates one, Left and Right move a slider by one, Home and End jump to its ends, and Escape closes the panel. "Reset to defaults" asks before it resets anything.
+
+<br clear="right" />
+
+## Requirements
+
+- Omarchy 4 with its Quickshell bar
+- Hyprland 0.56 or newer
+- For agent status only: [Herdr](https://herdr.dev) and `python3`
+
+Spaces works with the bar on any edge of the screen. It is tested on a single monitor.
 
 ## Install
 
+Add the plugin. Omarchy clones it into `~/.config/omarchy/plugins/cyperx84.spaces` and asks you to confirm first. Plugins are added disabled so you can read the code before running it.
+
 ```sh
-omarchy plugin add https://github.com/cyperx84/omarchy-spaces.git --enable
-omarchy plugin disable omarchy.workspaces   # optional: replace the built-in switcher
+omarchy plugin add https://github.com/cyperx84/omarchy-spaces.git
 ```
 
-Requirements:
+Put it in the left section of the bar, next to the built-in switcher:
 
-- Omarchy 4 with the Quickshell bar (Hyprland 0.56 or newer)
-- [Herdr](https://herdr.dev) and `python3`, only for agent status
+```sh
+omarchy plugin enable cyperx84.spaces --section left --after omarchy.workspaces
+```
 
-Works with the bar on any edge of the screen. Tested on a single monitor.
+Optionally, remove the built-in switcher so you only have one:
 
-To update, then load the new code:
+```sh
+omarchy plugin disable omarchy.workspaces
+```
+
+`omarchy plugin add ... --enable` does the first two steps in one go and asks which section to use.
+
+## Using it
+
+| Action | Where | What it does |
+| --- | --- | --- |
+| Left-click | A pill | Go to that workspace |
+| Left-click | The active pill | Nothing, or go back to the previous workspace with "Clicking the active workspace" set to "Goes back" |
+| Left-click | An app icon | Focus that window. On a grouped icon that is already focused, cycle through its windows |
+| Middle-click | An app icon | Close that window, when "Middle-click icon closes window" is on |
+| Scroll | Anywhere on the widget | Step to the next or previous workspace, wrapping around |
+| Hover | A pill | Show its app icons and its shortcut tooltip, and, for another occupied workspace, its preview card |
+| Hover | An app icon | Show the window title, and the agent status on a Herdr window |
+| Left-click | A window in the preview card | Focus that window |
+| Left-click | The agents chip | Open or close the agents popup |
+| Left-click | A row in the agents popup | Focus that agent's pane in Herdr and the Herdr window |
+| Right-click | Anywhere on the widget | Open or close the settings panel |
+
+A gear button for the settings can be turned on under Appearance, "Settings button".
+
+## Keyboard and scripting
+
+Spaces answers IPC calls through `omarchy-shell`, so you can bind them to keys:
+
+```sh
+omarchy-shell cyperx84.spaces toggle    # open or close the settings panel
+omarchy-shell cyperx84.spaces peek 3    # show the preview card for workspace 3
+omarchy-shell cyperx84.spaces agents    # open or close the agents popup
+```
+
+For example, in `~/.config/hypr/bindings.lua`:
+
+```lua
+o.bind("SUPER + CTRL + ALT + S", "Spaces settings", "omarchy-shell cyperx84.spaces toggle")
+```
+
+Every method, its return value and more bindings are in [docs/scripting.md](docs/scripting.md).
+
+## Configuration
+
+Every setting is in the settings panel, and can also be set from a script with `omarchy bar set`. True/false values need `--json`:
+
+```sh
+omarchy bar set cyperx84.spaces showApps all
+omarchy bar set cyperx84.spaces groupApps true --json
+```
+
+The settings people change most:
+
+| Setting | Key | Values | Default |
+| --- | --- | --- | --- |
+| Show icons on | `showApps` | `all`, `active`, `hover`, `hoverOnly` | `hover` |
+| Workspace label | `labelStyle` | `number`, `key`, `both`, `glyph`, `none` | `both` |
+| Active workspace | `activeStyle` | `subtle`, `solid`, `accent` | `subtle` |
+| Always show workspaces | `persistentWorkspaces` | 0 to 10 | `5` |
+| Group windows by app | `groupApps` | `true`, `false` | `false` |
+| Workspace previews | `previews` | `true`, `false` | `true` |
+| Agents chip | `agentChip` | `auto`, `always`, `never` | `auto` |
+| Density | `density` | `compact`, `normal`, `roomy` | `normal` |
+
+All settings, with what each one does: [docs/configuration.md](docs/configuration.md).
+
+## Update
 
 ```sh
 omarchy plugin update cyperx84.spaces
-omarchy restart shell
 ```
+
+Omarchy shows the diff, fast-forwards the checkout and reloads plugin code. If the bar still shows the old version, run `omarchy restart shell`.
 
 ## Remove
 
@@ -83,60 +164,46 @@ omarchy plugin remove cyperx84.spaces
 omarchy plugin enable omarchy.workspaces   # bring back the built-in switcher
 ```
 
-If you added the key binding below, delete it from `~/.config/hypr/bindings.lua`.
+If you bound any `omarchy-shell cyperx84.spaces` calls to keys, remove them from `~/.config/hypr/bindings.lua`.
 
-## Using it
+## Troubleshooting
 
-- Click a workspace to go there. Click an icon to focus that window.
-- Scroll over the widget to move between workspaces.
-- Hover an icon to see the window title, and a workspace to see its keys.
-- With Herdr running, click the agents chip to list agents and jump to one.
-- Hover another workspace to preview it. Click a window in the preview to focus it.
-- Right-click the widget to open settings. An optional gear can be enabled under Appearance → Settings button; it stays in a fixed slot before the workspaces.
+- **The widget does not appear after installing.** Plugins are added disabled. Run `omarchy plugin enable cyperx84.spaces --section left`.
+- **No agent badges.** Herdr has to be running, `python3` has to be installed, and Herdr's client has to run in a terminal window. Check with `python3 ~/.config/omarchy/plugins/cyperx84.spaces/hooks/herdr-feed --once`, which prints what Spaces sees.
+- **No key captions.** Spaces can only show a key Hyprland reports by name. Omarchy's stock `SUPER + 1` to `SUPER + 0` binds are reported without one, so with them the pills show only numbers. Run `hyprctl binds -j` to see what Spaces sees.
+- **Every terminal window gets the badge.** Your terminal serves several windows from one process, so Spaces cannot tell which one runs Herdr.
 
-## Settings
+More, with causes and fixes: [docs/troubleshooting.md](docs/troubleshooting.md).
 
-<img src=".github/assets/settings.png" width="330" align="right" alt="Spaces settings panel" />
+## Documentation
 
-Settings are organised into App icons, Windows, Appearance, Workspaces, Previews, and Behaviour. Each section fits its controls without an internal scroll area, and changes apply automatically and are saved to `~/.config/omarchy/shell.json`.
+- [Configuration](docs/configuration.md): every setting, its key, values and default
+- [Agent status](docs/agents.md): Herdr badges, the agents chip and popup, reporting other agents, demo mode
+- [Key hints](docs/key-hints.md): how binds are read, label styles and the shortcut tooltip
+- [Scripting](docs/scripting.md): IPC methods and example key bindings
+- [Troubleshooting](docs/troubleshooting.md): symptoms, causes and fixes
+- [Development](docs/development.md): architecture, tests and releasing
+- [Changelog](CHANGELOG.md)
 
-Use Tab / Shift+Tab to move through controls and Enter / Space to activate them. On sliders, use Left / Right to adjust by one, or Home / End for the minimum or maximum. Reset to defaults asks for confirmation before resetting all sections.
+## Contributing
 
-To open settings with a key, add this to `~/.config/hypr/bindings.lua`:
+Bug reports, fixes and ideas are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for how to report a bug, set up a development copy and run the tests.
 
-```lua
-o.bind("SUPER + CTRL + ALT + S", "Spaces settings", "omarchy-shell cyperx84.spaces toggle")
-```
+## Credits
 
-To preview a workspace from a key or script, without hovering:
+Spaces began as [omarchy-spaces](https://github.com/tornikegomareli/omarchy-spaces) by [Tornike Gomareli](https://github.com/tornikegomareli), released under the MIT license. The pill and icon design, the live previews, the settings panel and the original idea of agent badges on terminal windows are his work, and much of the code here is still his.
 
-```sh
-omarchy-shell cyperx84.spaces peek 3
-```
+The original project's contributors are part of this one too: [@tseluka](https://github.com/tseluka) (pill background setting, focused-icon fix), [@Natetgmaxwell](https://github.com/Natetgmaxwell) (sharper icons, distinct letter tiles), [@tcballard](https://github.com/tcballard) (the six settings pages and keyboard support), [@FarzadHayat](https://github.com/FarzadHayat) (OpenCode reporter, clearing badges left by crashed agents), [@VulpesZerda27](https://github.com/VulpesZerda27) (portrait and rotated previews), [@a-lang](https://github.com/a-lang) (omp reporter), [@Coding-Sparrow](https://github.com/Coding-Sparrow) and [@movshuri](https://github.com/movshuri) (fixing and reporting pills that vanished after an animation change). Their work is listed in the [inherited changelog](CHANGELOG.md#before-20-omarchy-spaces-by-tornike-gomareli). Thank you.
 
-Settings can also be set from a script:
+This project, maintained by [Cyperx](https://github.com/cyperx84), changes and adds:
 
-```sh
-omarchy bar set cyperx84.spaces showApps all
-```
+- Agent status read from Herdr through `hooks/herdr-feed`, in place of the per-agent hooks for Claude Code, OpenCode and omp
+- The agents chip, the agents popup and agent rows on the preview card
+- Key captions and shortcut tooltips read from your live Hyprland binds
+- Tooltips on app icons and the settings gear, which did not show before
 
-<br clear="right" />
-
-## Development
-
-From a clone of this repository, link it into Omarchy and run the tests:
-
-```sh
-ln -sfn "$PWD" ~/.config/omarchy/plugins/cyperx84.spaces
-omarchy plugin enable cyperx84.spaces
-node tests/model.test.js
-bash tests/settings.sh
-# Optional: opens a temporary Wayland window to test the settings gear
-bash tests/gear.sh
-```
-
-Pure logic lives in `Model.js` and is tested with node; `tests/settings.sh` runs the settings panel offscreen. Neither loads the bar widget itself. After code changes, run `omarchy restart shell`.
+Spaces runs on [Omarchy](https://omarchy.org), [Quickshell](https://quickshell.org) and [Hyprland](https://hypr.land), and gets agent status from [Herdr](https://herdr.dev).
 
 ## License
 
-[MIT License](LICENSE).
+[MIT](LICENSE). Copyright (c) 2026 Tornike Gomareli and (c) 2026 Cyperx.

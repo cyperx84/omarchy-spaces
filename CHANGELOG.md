@@ -1,31 +1,42 @@
 # Changelog
 
+All notable changes to Spaces. Versions follow [semantic versioning](https://semver.org).
+
 ## 2.0.0
 
-Fork by cyperx84 of tornikegomareli/omarchy-spaces.
+The first release of Spaces as its own project, `cyperx84.spaces`, built on [omarchy-spaces](https://github.com/tornikegomareli/omarchy-spaces) 1.2.0 by Tornike Gomareli.
 
-- Agent status comes from Herdr: "Badge Herdr terminals from Herdr's own agent
-  status". The widget runs `hooks/herdr-feed`, and the window hosting Herdr
-  gets the badge with a tooltip line per agent. New `herdrAgents` setting
-- Agents chip and list: "Add a Herdr agents chip, an agents list and agent
-  rows in previews". Counts after the pills, a card to jump to an agent, and
-  agent rows in the preview of the Herdr workspace. New `agentChip` setting
-- Workspace keys: "Show each workspace's key from the live Hyprland binds".
-  Label style gains `key` and `both`, and `both` is the new default. New
-  "Shortcut tooltips" setting. App icon and gear tooltips now show; they
-  never did before
-- Review fixes: "Fix review findings in the Herdr feed, agents chip and
-  settings". The feed backs off while Herdr is absent, takes snapshots at
-  most once a second, and the agent toggles no longer depend on app icons
-- Removed: the Claude Code, OpenCode and omp reporters. The
-  `omarchy-shell cyperx84.spaces agent` reporter remains for other agents
-- Fixed the settings test, which clicked into a page before it had laid out
-- Forked as `cyperx84.spaces` (see "Fork as cyperx84.spaces and drop the
-  per-agent hook reporters")
+### Added
 
-## Upstream history
+- Agent status from [Herdr](https://herdr.dev). Spaces reads Herdr's own agent status through `hooks/herdr-feed`, a small Python 3 script it runs in the background, and badges the terminal window hosting Herdr: a spinner while an agent works, a pulsing `!` when one is blocked on you, a check mark when one is done. When more than one agent is live, a count beside the badge says how many, and the icon's tooltip lists each agent. New "Herdr agents" setting (`herdrAgents`)
+- The agents chip after the workspace pills counts waiting, working and done agents, and pulses while one waits. New "Agents chip" setting (`agentChip`): Auto, Always or Never
+- The agents popup: click the chip for every agent, newest change first, with its Herdr workspace, title and agent name. Click a row to focus the agent's pane in Herdr and the Herdr window in Hyprland
+- `omarchy-shell cyperx84.spaces agents` opens and closes the agents popup, so it can be bound to a key
+- The preview card of the workspace holding Herdr lists up to five agents, clickable the same way
+- Key hints from your own Hyprland binds. Spaces reads `hyprctl binds -j`, both Omarchy's Lua binds and classic `workspace` binds, and again after every config reload
+- "Workspace label" gains Key and Number + key styles. Number + key, the new default, shows the switch key as a small caption beside the number
+- Shortcut tooltips: hover a pill to see the keys that switch to it and move a window to it. New "Shortcut tooltips" setting (`keyTooltips`)
+- Demo mode for trying the agent features and taking screenshots without Herdr: `omarchy bar set cyperx84.spaces demo true --json` plays scripted agents through every status
 
-## 1.2.0
+### Changed
+
+- The plugin id is now `cyperx84.spaces`, so it can be installed beside the original `tornikegomareli.spaces`
+- "Agent status" and "Herdr agents" stay available with app icons turned off, since the agents chip does not need icons
+- Without Herdr or `python3`, nothing is shown and nothing is logged. The feed retries in the background, backing off to once a minute, and starts at once when a Herdr client appears
+
+### Fixed
+
+- Tooltips on app icons and on the settings gear now show. They never appeared before
+
+### Removed
+
+- The Claude Code hook, the OpenCode plugin and the omp extension. Agents in Herdr are covered by the Herdr feed, and any other agent can still report through `omarchy-shell cyperx84.spaces agent <session> <state> <pids>`; see [docs/agents.md](docs/agents.md#reporting-agents-outside-herdr)
+
+## Before 2.0: omarchy-spaces by Tornike Gomareli
+
+The entries below are the history of [tornikegomareli/omarchy-spaces](https://github.com/tornikegomareli/omarchy-spaces), kept as they were written. Plugin ids, hook paths and commands in them refer to that project.
+
+### 1.2.0
 
 - Agent status for omp (oh-my-pi): add `hooks/omp-extension.js` to your omp
   config and its terminals get the same badges as Claude Code. An approval
@@ -42,7 +53,7 @@ Fork by cyperx84 of tornikegomareli/omarchy-spaces.
 - Security: window titles in the bar and in previews render as plain text, so
   a title with markup can no longer load remote images in the shell
 
-## 1.1.0
+### 1.1.0
 
 - Settings are organised into six pages: App icons, Windows, Appearance,
   Workspaces, Previews, and Behaviour. They work from the keyboard, the
@@ -60,11 +71,11 @@ Fork by cyperx84 of tornikegomareli/omarchy-spaces.
   every workspace pill until the shell restarted (#9, reported by @movshuri,
   fix by @Coding-Sparrow)
 
-## 1.0.0
+### 1.0.0
 
 First stable release, ready for the Omarchy plugin marketplace.
 
-- The plugin ID is now `cyperx84.spaces`, matching the repository owner.
+- The plugin ID is now `tornikegomareli.spaces`, matching the repository owner.
   If you installed an earlier version, remove `insanearts.spaces`, add the plugin
   again, and update the hook paths in `~/.claude/settings.json`.
 - README: screenshots from the product film, requirements, and update and
@@ -72,7 +83,7 @@ First stable release, ready for the Omarchy plugin marketplace.
 - Marketplace preview image
 - Verified with the bar on the top, bottom, left and right edges
 
-## 0.3.0
+### 0.3.0
 
 - Agent status: terminals running Claude Code show a spinner while the agent
   works, a pulsing `!` when it needs input, and a check mark when it is done.
@@ -80,7 +91,7 @@ First stable release, ready for the Omarchy plugin marketplace.
 - `hooks/claude-hook` reports agent state; see the README for setup
 - Setting to turn agent status off
 
-## 0.2.0
+### 0.2.0
 
 - Live workspace previews: hover another workspace to see a miniature of it,
   with each window where it really is. Click a window to jump to it
@@ -92,7 +103,7 @@ First stable release, ready for the Omarchy plugin marketplace.
 - Icons for apps with reverse-DNS ids, such as `dev.example.tool`
 - Fix: workspaces could stay half faded after appearing
 
-## 0.1.0
+### 0.1.0
 
 First release.
 

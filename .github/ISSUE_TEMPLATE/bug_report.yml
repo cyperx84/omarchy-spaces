@@ -1,0 +1,97 @@
+name: Bug report
+description: Something in Spaces does not work as described.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. [docs/troubleshooting.md](https://github.com/cyperx84/omarchy-spaces/blob/main/docs/troubleshooting.md) covers the most common problems, so please check it first.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected to see instead. Screenshots or a short recording help for anything visual.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open two windows on workspace 3
+        2. Hover the pill for workspace 3
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: spaces-version
+    attributes:
+      label: Spaces version
+      description: The `version` field in `~/.config/omarchy/plugins/cyperx84.spaces/manifest.json`.
+      placeholder: 2.0.0
+    validations:
+      required: true
+  - type: input
+    id: omarchy-version
+    attributes:
+      label: Omarchy version
+      description: Output of `omarchy version`.
+    validations:
+      required: true
+  - type: input
+    id: hyprland-version
+    attributes:
+      label: Hyprland version
+      description: First line of `hyprctl version`.
+    validations:
+      required: true
+  - type: input
+    id: quickshell-version
+    attributes:
+      label: Quickshell version
+      description: Output of `qs --version`.
+    validations:
+      required: true
+  - type: input
+    id: herdr-version
+    attributes:
+      label: Herdr version
+      description: Output of `herdr --version`, if the bug is about agent status. Leave empty otherwise.
+  - type: dropdown
+    id: bar-position
+    attributes:
+      label: Bar position
+      options:
+        - Top
+        - Bottom
+        - Left
+        - Right
+    validations:
+      required: true
+  - type: input
+    id: monitors
+    attributes:
+      label: Monitors
+      description: How many monitors, with their resolution, scale and rotation. `hyprctl monitors` shows them.
+      placeholder: One monitor, 2880x1800 at scale 2
+    validations:
+      required: true
+  - type: textarea
+    id: settings
+    attributes:
+      label: Spaces settings
+      description: The `cyperx84.spaces` entry from `~/.config/omarchy/shell.json`, or "defaults".
+      render: json
+  - type: textarea
+    id: log
+    attributes:
+      label: Shell log
+      description: Run `qs log -p /usr/share/omarchy/shell` and paste the lines around the problem, especially any mentioning `Spaces.qml`, `SpacesSettings.qml` or `Model.js`. Remove anything private first.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: For key hints, the relevant part of `hyprctl binds -j`. For agent status, the output of `python3 ~/.config/omarchy/plugins/cyperx84.spaces/hooks/herdr-feed --once`.

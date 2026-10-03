@@ -1,0 +1,55 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Model tests
+        run: node tests/model.test.js
+
+      - name: Herdr feed compiles
+        run: python3 -m py_compile hooks/herdr-feed
+
+      - name: Manifest matches Model.js defaults
+        run: |
+          node - <<'JS'
+          const fs = require("fs")
+          const manifest = JSON.parse(fs.readFileSync("manifest.json", "utf8"))
+          const src = fs.readFileSync("Model.js", "utf8").replace(/^\.pragma library\s*/, "")
+          const mod = { exports: {} }
+          new Function("module", src)(mod)
+          const defaults = mod.exports.DEFAULTS
+          const schema = (manifest.barWidget && manifest.barWidget.schema) || []
+          const byKey = {}
+          for (const entry of schema) byKey[entry.key] = entry
+          const problems = []
+          for (const key of Object.keys(defaults)) {
+            if (!byKey[key]) problems.push(`${key}: in Model.js DEFAULTS but not in the manifest schema`)
+            else if (JSON.stringify(byKey[key].default) !== JSON.stringify(defaults[key]))
+              problems.push(`${key}: manifest default ${JSON.stringify(byKey[key].default)}, Model.js default ${JSON.stringify(defaults[key])}`)
+          }
+          for (const key of Object.keys(byKey))
+            if (!(key in defaults)) problems.push(`${key}: in the manifest schema but not in Model.js DEFAULTS`)
+          if (problems.length) {
+            for (const p of problems) console.error("::error file=manifest.json::" + p)
+            process.exit(1)
+          }
+          console.log(`manifest.json parses; ${Object.keys(defaults).length} settings match Model.js DEFAULTS`)
+          JS
