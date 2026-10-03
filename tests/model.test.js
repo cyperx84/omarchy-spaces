@@ -561,4 +561,37 @@ test("window titles render as plain text", () => {
   for (const b of titled) assert.match(b, /textFormat:\s*Text\.PlainText/, b.split("\n").find((l) => /text:/.test(l)).trim())
 })
 
+test("demo setting validates", () => {
+  assert.strictEqual(M.resolveSettings({}).demo, false)
+  assert.strictEqual(M.resolveSettings({ demo: true }).demo, true)
+  assert.strictEqual(M.resolveSettings({ demo: "yes" }).demo, false)
+})
+
+test("parseHerdrFeed keeps demo and real lines apart", () => {
+  const real = JSON.stringify({ type: "herdr", agents: [{ pane_id: "w1:p1", title: "real" }] })
+  const demo = JSON.stringify({ type: "herdr", demo: true, agents: [{ pane_id: "demo:1", title: "fake" }] })
+  assert.strictEqual(M.parseHerdrFeed(real).length, 1)
+  assert.strictEqual(M.parseHerdrFeed(demo), null)
+  assert.strictEqual(M.parseHerdrFeed(real, true), null)
+  assert.strictEqual(M.parseHerdrFeed(demo, true)[0].title, "fake")
+})
+
+test("isTerminalAppId knows common terminals", () => {
+  for (const id of ["com.mitchellh.ghostty", "foot", "footclient", "Alacritty", "kitty", "org.wezfurlong.wezterm"])
+    assert.ok(M.isTerminalAppId(id), id)
+  for (const id of ["zen", "firefox", "kitty-notes", "", undefined]) assert.ok(!M.isTerminalAppId(id), String(id))
+})
+
+test("demoHostAddress prefers a terminal on workspace 3 or later", () => {
+  const ws = [
+    { id: 5, windows: [{ address: "e", appId: "foot" }] },
+    { id: 1, windows: [{ address: "a", appId: "com.mitchellh.ghostty" }] },
+    { id: 4, windows: [{ address: "b", appId: "zen" }, { address: "c", appId: "com.mitchellh.ghostty" }, { address: "d", appId: "foot" }] }
+  ]
+  assert.strictEqual(M.demoHostAddress(ws), "c")
+  assert.strictEqual(M.demoHostAddress(ws.slice(1, 2)), "a")
+  assert.strictEqual(M.demoHostAddress([{ id: 4, windows: [{ address: "b", appId: "zen" }] }]), "")
+  assert.strictEqual(M.demoHostAddress(null), "")
+})
+
 if (failed) { console.log(failed + " failed"); process.exit(1) }

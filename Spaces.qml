@@ -141,7 +141,8 @@ Panel {
 
   // Reporter states and Herdr states share one map; the more urgent wins.
   readonly property var agentByPid: {
-    if (!root.cfg.agentStatus) return ({})
+    // Demo mode shows only its made-up agents, never real ones.
+    if (!root.cfg.agentStatus || root.herdrDemo) return ({})
     return Model.mergeAgentStates(Model.agentStates(root.agents, root.windowPids), root.herdrByPid)
   }
 
@@ -150,6 +151,9 @@ Panel {
     var rank = { waiting: 3, working: 2, done: 1 }
     for (var i = 0; i < addresses.length; i++) {
       var state = root.agentByPid[root.pidByAddress[addresses[i]]] || ""
+      // In demo mode the stand-in host wears the scripted agents' state.
+      var demo = root.herdrDemo && addresses[i] === root.herdrDemoHost ? root.herdrState.state : ""
+      if (demo && (!state || rank[demo] > rank[state])) state = demo
       if (state && (!best || rank[state] > rank[best])) best = state
     }
     return best
@@ -283,7 +287,21 @@ Panel {
   // a Herdr window when a Herdr client process runs under it. Herdr cannot
   // say which client shows which workspace, so with several Herdr windows
   // every one of them wears the combined state.
-  readonly property bool herdrWanted: root.cfg.agentStatus && root.cfg.herdrAgents
+  readonly property bool herdrWanted: root.cfg.agentStatus && (root.cfg.herdrAgents || root.cfg.demo)
+  // Demo mode (the developer setting `demo`, for screenshots): the feed runs
+  // with --demo and plays four made-up agents; Herdr itself is never asked.
+  // No Herdr client is needed either: the first terminal on workspace 3 or
+  // later (else any terminal) stands in as the Herdr window, and clicking an
+  // agent only focuses that window.
+  readonly property bool herdrDemo: root.herdrWanted && root.cfg.demo
+  readonly property string herdrDemoHost: {
+    if (!root.herdrDemo) return ""
+    var list = []
+    for (var id in root.workspaceMap) list.push(root.workspaceMap[id])
+    return Model.demoHostAddress(list)
+  }
+  // Set while the feed stops to come back in the other mode.
+  property bool herdrFeedRestart: false
   readonly property string herdrFeedPath: Model.localPath(Qt.resolvedUrl("hooks/herdr-feed"))
   property var herdrFeedAgents: []
   property string herdrClientText: ""
@@ -301,7 +319,7 @@ Panel {
   //    agent, status, title, focused, session }], as hooks/herdr-feed sends it.
   readonly property var herdrAgents: root.herdrWanted ? root.herdrFeedAgents : []
   // PIDs of the windows hosting a Herdr client, sorted.
-  readonly property var herdrWindowPids: root.herdrWanted ? Model.parseHerdrClients(root.herdrClientText, root.windowPids) : []
+  readonly property var herdrWindowPids: root.herdrWanted && !root.herdrDemo ? Model.parseHerdrClients(root.herdrClientText, root.windowPids) : []
   readonly property var herdrState: Model.herdrSummary(root.herdrAgents, root.herdrAcked)
   readonly property var herdrByPid: Model.herdrStatesByPid(root.herdrWindowPids, root.herdrState)
 
@@ -310,8 +328,24 @@ Panel {
   readonly property string windowPidKey: Object.keys(root.windowPids).sort().join(",")
   onWindowPidKeyChanged: if (root.herdrWanted) herdrProbeDebounce.restart()
   onHerdrWantedChanged: root.syncHerdr()
+  // The real and the demo feed never share a moment: drop what one said and
+  // start the other once the first has exited.
+  onHerdrDemoChanged: {
+    herdrRetry.stop()
+    root.herdrFeedAgents = []
+    root.herdrAcked = ({})
+    root.herdrFeedKey = ""
+    root.herdrQuickExits = 0
+    if (herdrFeed.running) {
+      root.herdrFeedRestart = true
+      herdrFeed.running = false
+    } else {
+      root.syncHerdr()
+    }
+  }
 
   function isHerdrWindow(address) {
+    if (root.herdrDemo) return address !== "" && address === root.herdrDemoHost
     return root.herdrWindowPids.indexOf(root.pidByAddress[address]) !== -1
   }
 
@@ -336,7 +370,7 @@ Panel {
   }
 
   function applyHerdrFeed(line) {
-    var agents = Model.parseHerdrFeed(line)
+    var agents = Model.parseHerdrFeed(line, root.herdrDemo)
     if (!agents) return
     root.herdrFeedSpoke = true
     // New or closed panes, or focus moving, can mean a client came or went.
@@ -351,6 +385,10 @@ Panel {
   }
 
   function viewingHerdr() {
+    if (root.herdrDemo) {
+      var active = Hyprland.activeToplevel
+      return !!active && root.herdrDemoHost !== "" && String(active.address) === root.herdrDemoHost
+    }
     var pid = root.activeWindowPid()
     return pid > 0 && root.herdrWindowPids.indexOf(pid) !== -1
   }
@@ -361,7 +399,7 @@ Panel {
   }
 
   function startHerdrProbe() {
-    if (!root.herdrWanted || herdrClientProbe.running) return
+    if (!root.herdrWanted || root.herdrDemo || herdrClientProbe.running) return
     herdrClientProbe.running = true
   }
 
@@ -369,7 +407,10 @@ Panel {
     id: herdrFeed
     // bash first, so a machine without Herdr's socket or without python3
     // never starts an interpreter: the feed simply exits and is retried.
-    command: ["bash", "-c", [
+    command: root.herdrDemo
+      ? ["bash", "-c", 'command -v python3 >/dev/null 2>&1 || exit 0; exec python3 "$1" --demo',
+        "spaces-herdr-feed", root.herdrFeedPath]
+      : ["bash", "-c", [
       's=${HERDR_SOCKET_PATH:-$HOME/.config/herdr/herdr.sock};',
       '[[ -S $s ]] || exit 0;',
       'command -v python3 >/dev/null 2>&1 || exit 0;',
@@ -385,6 +426,11 @@ Panel {
       // less often each time it is still not there.
       root.herdrFeedAgents = []
       root.herdrFeedKey = ""
+      if (root.herdrFeedRestart) {
+        root.herdrFeedRestart = false
+        root.syncHerdr()
+        return
+      }
       var quick = !root.herdrFeedSpoke && Date.now() - root.herdrFeedStarted < 2000
       root.herdrQuickExits = quick ? root.herdrQuickExits + 1 : 0
       herdrRetry.interval = Model.herdrRetryDelay(root.herdrQuickExits)
@@ -724,7 +770,12 @@ Panel {
   Timer {
     id: iconDebounce
     interval: 1500
-    onTriggered: root.invalidateIcons()
+    // A new app may bring new icon files: re-index them (the scan's exit
+    // also clears the cache). If a scan is running, just clear the cache.
+    onTriggered: {
+      root.invalidateIcons()
+      if (!iconScan.running) iconScan.running = true
+    }
   }
 
   Component.onCompleted: {
@@ -763,6 +814,15 @@ Panel {
     root.agentsWanted = false
   }
 
+  // Opens or closes the list without a click, e.g. from a keybinding. Opening
+  // needs the chip on the bar and the settings panel closed (it would hide the
+  // list); closing always works. False when it could not open.
+  function toggleAgentsList() {
+    if (!root.agentsOpen && (!agentChip.visible || root.opened)) return false
+    root.toggleAgents()
+    return true
+  }
+
   function agentsTooltip() {
     return ["Herdr agents"].concat(Model.herdrTooltipLines(root.sortedAgents, 48)).join("\n")
   }
@@ -771,6 +831,13 @@ Panel {
   // Herdr. `preferred` windows (the previewed workspace's) are tried first.
   function focusAgent(agent, preferred) {
     if (!agent || !agent.pane_id) return
+    if (root.herdrDemo) {
+      // Made-up agents have no pane to focus; just raise the stand-in host.
+      if (root.herdrDemoHost) root.focusWindow(root.herdrDemoHost)
+      root.closeAgents()
+      root.hidePreview()
+      return
+    }
     root.run("herdr agent focus " + Util.shellQuote(agent.pane_id) + " >/dev/null 2>&1")
     var windows = (preferred || []).slice()
     var ids = Object.keys(root.workspaceMap).sort(function(l, r) { return Number(l) - Number(r) })
@@ -857,7 +924,11 @@ Panel {
 
   // Opens the preview for a workspace without hovering, e.g. from a
   // keybinding. Closes on its own unless the pointer moves onto the card.
+  // Unlike hovering, the active workspace may be peeked too, on purpose.
+  // False when nothing would show: previews off, settings or the agent list
+  // open, or an empty workspace.
   function peek(id) {
+    if (!root.cfg.previews || root.opened || root.agentsOpen) return false
     var idx = root.workspaceIds.indexOf(Number(id))
     var pill = idx >= 0 ? pillRepeater.itemAt(idx) : null
     if (!pill || !pill.occupied) return false
@@ -889,6 +960,7 @@ Panel {
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
     function peek(workspace: string): string { return root.peek(workspace) ? "ok" : "empty" }
+    function agents(): string { return root.toggleAgentsList() ? "ok" : "empty" }
     function agent(session: string, state: string, pids: string): void {
       // One IPC handler serves every monitor's bar, so relay to all of them.
       var items = root.bar && typeof root.bar.moduleWidgets === "function" ? root.bar.moduleWidgets(root.moduleName) : [root]
@@ -1446,7 +1518,7 @@ Panel {
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton
         cursorShape: Qt.PointingHandCursor
-        onClicked: root.toggleAgents()
+        onClicked: root.toggleAgentsList()
         onWheel: function(wheel) { root.scrollBy(wheel.angleDelta.y || wheel.angleDelta.x) }
       }
 
@@ -1868,6 +1940,10 @@ Panel {
     bar: root.bar ? root.bar : previewBar
     owner: agentsOwner
     open: root.agentsOpen
+    // Clicking outside closes the list. Demo mode, which exists for
+    // screenshots, skips that focus grab: capture tools and input elsewhere
+    // would close the list before it could be recorded.
+    triggerMode: root.herdrDemo ? "hover" : "click"
     contentWidth: agentsCard.fittedContentWidth(Style.space(380))
     contentHeight: agentsCard.fittedContentHeight(agentsColumn.implicitHeight)
 

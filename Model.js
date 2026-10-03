@@ -35,7 +35,8 @@ var DEFAULTS = {
   previewLive: true,          // keep previews streaming; false = one frame
   agentStatus: true,          // badges for coding agents running in terminals
   herdrAgents: true,          // agent status from Herdr for terminals hosting it
-  agentChip: "auto"           // Herdr agents chip: "auto" | "always" | "never"
+  agentChip: "auto",          // Herdr agents chip: "auto" | "always" | "never"
+  demo: false                 // developer: scripted fake agents for screenshots
 }
 
 var SHOW_APPS = ["all", "active", "hover", "hoverOnly"]
@@ -98,7 +99,8 @@ function resolveSettings(raw) {
     previewLive: bool(s.previewLive, d.previewLive),
     agentStatus: bool(s.agentStatus, d.agentStatus),
     herdrAgents: bool(s.herdrAgents, d.herdrAgents),
-    agentChip: oneOf(s.agentChip, AGENT_CHIPS, d.agentChip)
+    agentChip: oneOf(s.agentChip, AGENT_CHIPS, d.agentChip),
+    demo: bool(s.demo, d.demo)
   }
 }
 
@@ -488,11 +490,14 @@ function herdrBarState(status) {
 
 // One feed line -> the agent list, or null when the line is not a snapshot.
 // Every field is coerced: the text comes from other processes and is only
-// ever rendered as plain text.
-function parseHerdrFeed(line) {
+// ever rendered as plain text. `demo` accepts only the scripted lines of
+// `herdr-feed --demo` (marked "demo": true) and otherwise only real ones, so
+// a line from the other feed can never slip through while it winds down.
+function parseHerdrFeed(line, demo) {
   var data
   try { data = JSON.parse(String(line || "")) } catch (e) { return null }
   if (!data || data.type !== "herdr" || !Array.isArray(data.agents)) return null
+  if ((data.demo === true) !== !!demo) return null
   var out = []
   for (var i = 0; i < data.agents.length; i++) {
     var a = data.agents[i]
@@ -661,6 +666,34 @@ function herdrHostAnywhere(windows, clientText) {
   return herdrHostAddress(windows, parseHerdrClients(clientText, pids))
 }
 
+// ---- Demo mode
+
+// Terminal emulators, by app id: "com.mitchellh.ghostty", "foot", "footclient",
+// "Alacritty", "kitty", "org.wezfurlong.wezterm".
+function isTerminalAppId(appId) {
+  return /(^|\.)(ghostty|foot|footclient|alacritty|kitty|wezterm)$/i.test(String(appId || ""))
+}
+
+// The window that stands in for the Herdr host in demo mode, since no real
+// Herdr client is needed: the first terminal, by workspace id and then left to
+// right, among workspaces 3 and up (1 and 2 usually hold real work), else
+// the first terminal anywhere. `workspaces`: [{ id, windows: [{ address,
+// appId }] }], each window list already in screen order. "" when none.
+function demoHostAddress(workspaces) {
+  var list = (Array.isArray(workspaces) ? workspaces : []).filter(function(w) { return w && w.id > 0 })
+  list.sort(function(l, r) { return l.id - r.id })
+  var fallback = ""
+  for (var i = 0; i < list.length; i++) {
+    var windows = list[i].windows || []
+    for (var j = 0; j < windows.length; j++) {
+      if (!windows[j] || !isTerminalAppId(windows[j].appId)) continue
+      if (list[i].id >= 3) return windows[j].address
+      if (!fallback) fallback = windows[j].address
+    }
+  }
+  return fallback
+}
+
 // ---- Key binds
 
 // Hyprland's modifier bits, in the order a shortcut is spelled out.
@@ -820,6 +853,7 @@ if (typeof module !== "undefined") {
     agentChipSummary: agentChipSummary, agentChipSegments: agentChipSegments, sortAgents: sortAgents,
     herdrHostAddress: herdrHostAddress, herdrHostAnywhere: herdrHostAnywhere,
     herdrRetryDelay: herdrRetryDelay, herdrFeedKey: herdrFeedKey,
+    isTerminalAppId: isTerminalAppId, demoHostAddress: demoHostAddress,
     previewWidth: previewWidth, previewDimensions: previewDimensions, monitorArea: monitorArea, previewLayout: previewLayout, durationFor: durationFor,
     workspaceIds: workspaceIds, workspaceLabel: workspaceLabel, workspaceCaption: workspaceCaption, appKey: appKey,
     modNames: modNames, keyDisplay: keyDisplay, workspaceKeyBinds: workspaceKeyBinds, keyHintText: keyHintText,

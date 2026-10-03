@@ -21,6 +21,11 @@
 # quietly and the widget tries again later. It also exits 0 when the server
 # goes away. Pass --once to print a single snapshot and exit.
 #
+# Pass --demo for screenshots: no socket at all, just four made-up agents
+# going through working, blocked, done and idle on a fixed 20 second loop.
+# Its lines carry "demo": true, and the widget only accepts those while its
+# `demo` setting is on (and never otherwise).
+#
 # Stdlib only, so it runs anywhere python3 does.
 
 import json
@@ -175,12 +180,78 @@ def watch(printer):
                     printer.emit(snap)
 
 
+# The demo script: (agent, workspace label, workspace number, title) and one
+# Herdr status per two-second step. Every step has a live agent, so the chip
+# stays up, and every badge shows at some point in the loop.
+DEMO_AGENTS = [
+    ("claude", "api", 1, "fix flaky checkout test"),
+    ("codex", "web", 2, "migrate auth middleware"),
+    ("opencode", "docs", 3, "write release notes"),
+    ("claude", "infra", 4, "bump terraform providers"),
+]
+DEMO_STEPS = [
+    "working working working working done done done idle idle working",
+    "working working blocked blocked blocked working working working done done",
+    "done done idle idle working working working blocked blocked working",
+    "idle working working working working working done done idle idle",
+]
+DEMO_STEP = 2.0
+
+
+def demo_snapshot(step, changes):
+    agents = []
+    for i, (agent, label, number, title) in enumerate(DEMO_AGENTS):
+        steps = DEMO_STEPS[i].split()
+        agents.append({
+            "pane_id": "demo:p%d" % (i + 1),
+            "workspace_id": "demo:w%d" % number,
+            "workspace_label": label,
+            "workspace_number": number,
+            "tab_id": "demo:t%d" % (i + 1),
+            "agent": agent,
+            "status": steps[step % len(steps)],
+            "title": title,
+            "focused": False,
+            "session": "",
+            "state_change": changes[i],
+        })
+    return {"type": "herdr", "demo": True, "agents": agents, "focused_workspace_id": None}
+
+
+def demo():
+    # Deterministic: the same lines in the same order on every run. The
+    # change counter grows like Herdr's, so the newest change sorts first.
+    last = [None] * len(DEMO_AGENTS)
+    changes = [0] * len(DEMO_AGENTS)
+    seq = 0
+    step = 0
+    printed = None
+    while True:
+        for i in range(len(DEMO_AGENTS)):
+            status = DEMO_STEPS[i].split()[step % len(DEMO_STEPS[i].split())]
+            if status != last[i]:
+                seq += 1
+                changes[i] = seq
+                last[i] = status
+        line = json.dumps(demo_snapshot(step, changes), separators=(",", ":"))
+        if line != printed:
+            printed = line
+            sys.stdout.write(line + "\n")
+            sys.stdout.flush()
+        if "--once" in sys.argv[1:]:
+            return
+        step += 1
+        time.sleep(DEMO_STEP)
+
+
 def main():
     # The widget closing our stdout is a normal way to stop.
     signal.signal(signal.SIGPIPE, signal.SIG_DFL)
     printer = Printer()
     try:
-        if "--once" in sys.argv[1:]:
+        if "--demo" in sys.argv[1:]:
+            demo()
+        elif "--once" in sys.argv[1:]:
             snap = snapshot()
             if snap is not None:
                 printer.emit(snap)

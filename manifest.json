@@ -263,6 +263,12 @@
           "never"
         ],
         "default": "auto"
+      },
+      {
+        "key": "demo",
+        "type": "bool",
+        "label": "Demo agents (for screenshots)",
+        "default": false
       }
     ]
   }

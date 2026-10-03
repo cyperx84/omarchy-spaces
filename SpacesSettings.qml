@@ -257,7 +257,7 @@ Item {
         spacing: Style.space(12)
         visible: root.section === "behavior"
           // ---- Behavior
-          SectionTitle { text: "BEHAVIOR" }
+          SectionTitle { text: "BEHAVIOUR" }
 
           ChoiceSetting {
             title: "CLICKING THE ACTIVE WORKSPACE"
