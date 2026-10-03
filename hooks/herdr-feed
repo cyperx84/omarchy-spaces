@@ -9,10 +9,12 @@
 #   {"type": "herdr", "focused_workspace_id": "w35",
 #    "agents": [{"pane_id", "workspace_id", "workspace_label",
 #                "workspace_number", "tab_id", "agent", "status", "title",
-#                "focused", "session"}]}
+#                "focused", "session", "state_change"}]}
 #
 # `status` is Herdr's agent_status verbatim (idle | working | blocked | done |
-# unknown); the widget decides what earns a badge. Only panes running an agent
+# unknown); the widget decides what earns a badge. `state_change` is Herdr's
+# state_change_seq for the agent (higher is more recent, 0 when unknown), so
+# the widget can list the newest change first. Only panes running an agent
 # are listed.
 #
 # Herdr not installed or not running is not an error: the script exits 0
@@ -79,6 +81,8 @@ def snapshot():
 
 def normalize(snap):
     workspaces = {w.get("workspace_id"): w for w in snap.get("workspaces") or []}
+    # Only the agents list carries Herdr's change counter, not the panes.
+    changes = {a.get("pane_id"): a.get("state_change_seq") for a in snap.get("agents") or []}
     agents = []
     for pane in snap.get("panes") or []:
         status = pane.get("agent_status") or "unknown"
@@ -98,6 +102,7 @@ def normalize(snap):
             "title": pane.get("terminal_title_stripped") or pane.get("terminal_title") or "",
             "focused": pane.get("focused") is True,
             "session": session.get("value") or "",
+            "state_change": changes.get(pane.get("pane_id")) or 0,
         })
     return {"type": "herdr", "agents": agents,
             "focused_workspace_id": snap.get("focused_workspace_id")}

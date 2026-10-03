@@ -699,6 +699,51 @@ Panel {
     root.syncHerdr()
   }
 
+  // ------------------------------------------------------------ agents chip
+
+  // A pill after the workspaces that sums up every Herdr agent; clicking it
+  // lists them. One sorted list feeds the chip, its popup and the preview.
+  readonly property var sortedAgents: Model.sortAgents(root.herdrAgents)
+  readonly property var agentSummary: Model.agentChipSummary(root.herdrAgents, root.cfg.agentChip)
+  readonly property var agentSegments: Model.agentChipSegments(root.agentSummary)
+  property bool agentsWanted: false
+  // Not tied to the chip being shown: when the last agent goes while the
+  // list is open, it stays to say so instead of vanishing under the pointer.
+  readonly property bool agentsOpen: agentsWanted && root.herdrWanted && root.cfg.agentChip !== "never" && !root.opened
+
+  // Once closed for any reason (settings opening, Herdr switched off), it
+  // stays closed. Deferred: agentsOpen is still settling at this point.
+  onAgentsOpenChanged: {
+    if (root.agentsOpen) root.hidePreview()
+    else if (root.agentsWanted) Qt.callLater(root.closeAgents)
+  }
+
+  function toggleAgents() {
+    root.agentsWanted = !root.agentsOpen
+  }
+
+  function closeAgents() {
+    root.agentsWanted = false
+  }
+
+  function agentsTooltip() {
+    return ["Herdr agents"].concat(Model.herdrTooltipLines(root.sortedAgents, 48)).join("\n")
+  }
+
+  // Jumps to an agent: Herdr focuses its pane, Hyprland the window hosting
+  // Herdr. `preferred` windows (the previewed workspace's) are tried first.
+  function focusAgent(agent, preferred) {
+    if (!agent || !agent.pane_id) return
+    root.run("herdr agent focus " + Util.shellQuote(agent.pane_id) + " >/dev/null 2>&1")
+    var windows = (preferred || []).slice()
+    var ids = Object.keys(root.workspaceMap).sort(function(l, r) { return Number(l) - Number(r) })
+    for (var i = 0; i < ids.length; i++) windows = windows.concat(root.workspaceMap[ids[i]].windows)
+    var address = Model.herdrHostAddress(windows, root.herdrWindowPids)
+    if (address) root.focusWindow(address)
+    root.closeAgents()
+    root.hidePreview()
+  }
+
   // ------------------------------------------------------------ previews
 
   // Hovering a pill of another workspace shows a live miniature of it. One
@@ -708,7 +753,7 @@ Panel {
   property bool previewWanted: false
   property string highlightAddress: ""
 
-  readonly property bool previewOpen: previewWanted && previewWorkspaceId > 0 && !root.opened
+  readonly property bool previewOpen: previewWanted && previewWorkspaceId > 0 && !root.opened && !root.agentsOpen
     && root.cfg.previews && !!root.workspaceMap[previewWorkspaceId]
     && root.workspaceMap[previewWorkspaceId].windows.length > 0
 
@@ -786,7 +831,7 @@ Panel {
     onTriggered: if (!preview.containsMouse) root.hidePreview()
   }
 
-  onOpenedChanged: if (opened) hidePreview()
+  onOpenedChanged: if (opened) { hidePreview(); closeAgents() }
 
   // ------------------------------------------------------------ IPC
 
@@ -829,7 +874,7 @@ Panel {
     anchors.top: parent.top
     anchors.leftMargin: root.vertical ? Math.round((root.barSize - root.pillThickness) / 2) : 0
     anchors.topMargin: root.vertical ? 0 : Math.round((root.barSize - root.pillThickness) / 2)
-    columns: root.vertical ? 1 : Math.max(1, root.workspaceIds.length + 1)
+    columns: root.vertical ? 1 : Math.max(1, root.workspaceIds.length + 2)
     spacing: Style.space(root.metrics.gap)
 
     // Reserve the leading slot so workspace expansion cannot move the target.
@@ -1179,69 +1224,15 @@ Panel {
 
                       // Agent badge: spinner while working, pulse when it
                       // needs input, check mark when done.
-                      Item {
+                      AgentBadge {
                         id: agentBadge
                         visible: appIcon.agentState !== "" && appIcon.agentState !== "idle"
+                        agentState: appIcon.agentState
                         anchors.right: parent.right
                         anchors.top: parent.top
                         anchors.rightMargin: -Style.space(3)
                         anchors.topMargin: -Style.space(2)
                         width: Math.max(8, Math.round(root.iconPx * 0.6))
-                        height: width
-
-                        Rectangle {
-                          anchors.fill: parent
-                          radius: width / 2
-                          color: appIcon.agentState === "done" ? Color.accent
-                            : appIcon.agentState === "waiting" ? (root.bar ? root.bar.urgent : Color.urgent)
-                            : root.bg
-                        }
-
-                        Canvas {
-                          id: spinner
-                          anchors.fill: parent
-                          anchors.margins: 1.5
-                          visible: appIcon.agentState === "working"
-                          onPaint: {
-                            var ctx = getContext("2d")
-                            ctx.reset()
-                            ctx.lineWidth = Math.max(1.5, width * 0.18)
-                            ctx.lineCap = "round"
-                            ctx.strokeStyle = root.fg
-                            ctx.beginPath()
-                            ctx.arc(width / 2, height / 2, width / 2 - ctx.lineWidth / 2, 0, Math.PI * 1.4)
-                            ctx.stroke()
-                          }
-                          Connections {
-                            target: root
-                            function onFgChanged() { spinner.requestPaint() }
-                          }
-                          RotationAnimator on rotation {
-                            running: spinner.visible
-                            from: 0
-                            to: 360
-                            duration: 900
-                            loops: Animation.Infinite
-                          }
-                        }
-
-                        Text {
-                          anchors.centerIn: parent
-                          visible: appIcon.agentState === "done" || appIcon.agentState === "waiting"
-                          text: appIcon.agentState === "done" ? "\uf00c" : "!"
-                          color: root.bg
-                          font.family: root.fontFamily
-                          font.pixelSize: Math.round(parent.width * 0.62)
-                          font.bold: true
-                        }
-
-                        SequentialAnimation on scale {
-                          running: appIcon.agentState === "waiting"
-                          loops: Animation.Infinite
-                          alwaysRunToEnd: true
-                          NumberAnimation { from: 1; to: 1.3; duration: 520; easing.type: Easing.InOutSine }
-                          NumberAnimation { from: 1.3; to: 1; duration: 520; easing.type: Easing.InOutSine }
-                        }
                       }
 
                       // How many Herdr agents are live, beside the badge,
@@ -1349,7 +1340,114 @@ Panel {
       }
     }
 
+    // Every Herdr agent at a glance, after the workspaces: how many are
+    // waiting, working and done. Click to list them.
+    Item {
+      id: agentChip
+      objectName: "spacesAgentChip"
+      readonly property bool hovered: chipMouse.containsMouse
+      readonly property bool waiting: root.agentSummary.waiting > 0
+      readonly property color textColor: root.agentsOpen ? root.activeText() : root.fg
+      readonly property real pad: Style.space(root.metrics.pad)
+      // The bar only shows a tooltip while its target says it is hovered.
+      readonly property bool tooltipHovered: hovered && !root.agentsOpen
+      onTooltipHoveredChanged: tooltipHovered ? root.showTip(agentChip, root.agentsTooltip()) : root.hideTip(agentChip)
+      visible: root.herdrWanted && root.agentSummary.visible
 
+      // Same appear animation as the pills, each time the chip turns up.
+      property real appear: 1
+      opacity: appear
+      scale: 0.6 + 0.4 * appear
+      onVisibleChanged: if (visible && root.dur > 0) { appear = 0; chipAppear.start() }
+      NumberAnimation { id: chipAppear; target: agentChip; property: "appear"; to: 1; duration: root.dur; easing.type: Easing.OutBack }
+
+      width: implicitWidth
+      height: implicitHeight
+      implicitWidth: root.vertical ? root.pillThickness : chipContent.implicitWidth + pad * 2
+      implicitHeight: root.vertical ? chipContent.implicitHeight + pad * 2 : root.pillThickness
+
+      Behavior on implicitWidth { enabled: root.dur > 0; NumberAnimation { duration: root.dur; easing.type: Easing.OutCubic } }
+      Behavior on implicitHeight { enabled: root.dur > 0; NumberAnimation { duration: root.dur; easing.type: Easing.OutCubic } }
+
+      // Pulses like an urgent pill while an agent waits for input.
+      Rectangle {
+        anchors.fill: parent
+        radius: root.pillRadius
+        color: root.bar ? root.bar.urgent : Color.urgent
+        opacity: 0
+        visible: agentChip.waiting
+
+        SequentialAnimation on opacity {
+          running: agentChip.waiting && agentChip.visible
+          loops: Animation.Infinite
+          NumberAnimation { from: 0.15; to: 0.55; duration: 700; easing.type: Easing.InOutSine }
+          NumberAnimation { from: 0.55; to: 0.15; duration: 700; easing.type: Easing.InOutSine }
+        }
+      }
+
+      Rectangle {
+        anchors.fill: parent
+        radius: root.pillRadius
+        color: root.agentsOpen ? root.activeFill()
+          : agentChip.hovered ? Util.alpha(root.fg, 0.12)
+          : root.cfg.pillBackground ? Util.alpha(root.fg, 0.06)
+          : "transparent"
+        Behavior on color { enabled: root.fastDur > 0; ColorAnimation { duration: root.fastDur } }
+      }
+
+      MouseArea {
+        id: chipMouse
+        anchors.fill: parent
+        hoverEnabled: true
+        acceptedButtons: Qt.LeftButton
+        cursorShape: Qt.PointingHandCursor
+        onClicked: root.toggleAgents()
+        onWheel: function(wheel) { root.scrollBy(wheel.angleDelta.y || wheel.angleDelta.x) }
+      }
+
+      Grid {
+        id: chipContent
+        anchors.centerIn: parent
+        columns: root.vertical ? 1 : root.agentSegments.length + 1
+        horizontalItemAlignment: Grid.AlignHCenter
+        verticalItemAlignment: Grid.AlignVCenter
+        spacing: Style.space(4)
+
+        Text {
+          text: "\uf120"
+          color: agentChip.textColor
+          opacity: root.agentsOpen || agentChip.hovered ? 1 : 0.8
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.body
+          Behavior on color { enabled: root.fastDur > 0; ColorAnimation { duration: root.fastDur } }
+        }
+
+        Repeater {
+          model: root.agentSegments
+
+          delegate: Row {
+            required property var modelData
+            spacing: Style.space(2)
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: String(modelData.count)
+              color: agentChip.textColor
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+            }
+
+            AgentBadge {
+              anchors.verticalCenter: parent.verticalCenter
+              visible: modelData.state !== ""
+              agentState: modelData.state
+              width: Math.max(8, Math.round(root.iconPx * 0.6))
+            }
+          }
+        }
+      }
+    }
   }
 
   // ------------------------------------------------------------ preview card
@@ -1388,8 +1486,12 @@ Panel {
     readonly property var area: workspace ? workspace.area : null
     readonly property real desiredMapWidth: Style.space(Model.previewWidth(root.cfg.previewSize))
     readonly property real horizontalInset: padding * 2 + Style.space(4)
+    // Herdr agents get a strip on the card of a workspace holding Herdr.
+    readonly property bool showAgents: root.herdrAgents.length > 0 && workspace !== null
+      && root.herdrHosted(workspace.windows.map(function(w) { return w.address }))
     readonly property real chromeHeight: previewHeader.implicitHeight + previewFooter.implicitHeight
       + previewColumn.spacing * 2 + verticalContentInset
+      + (showAgents ? previewAgents.implicitHeight + previewColumn.spacing : 0)
     readonly property var mapSize: Model.previewDimensions(area, desiredMapWidth,
       availableCardWidth > 0 ? Math.max(1, availableCardWidth - horizontalInset) : desiredMapWidth,
       availableCardHeight > 0 ? Math.max(1, availableCardHeight - chromeHeight) : Infinity)
@@ -1486,6 +1588,92 @@ Panel {
           id: swapAnimation
           NumberAnimation { target: miniatureLoader; property: "opacity"; from: 0.35; to: 1; duration: root.dur; easing.type: Easing.OutCubic }
           NumberAnimation { target: miniatureLoader; property: "scale"; from: 0.97; to: 1; duration: root.dur; easing.type: Easing.OutCubic }
+        }
+      }
+
+      // One row per Herdr agent; click one to jump to it. Left out entirely
+      // for other workspaces, so their card keeps its usual layout.
+      Column {
+        id: previewAgents
+        readonly property int maxRows: 5
+        width: preview.mapWidth
+        visible: preview.showAgents
+        spacing: Style.space(1)
+
+        Repeater {
+          model: preview.showAgents ? root.sortedAgents.slice(0, previewAgents.maxRows) : []
+
+          delegate: Item {
+            id: stripRow
+            required property var modelData
+            width: previewAgents.width
+            implicitHeight: Math.max(stripLabel.implicitHeight, stripDot.height) + Style.space(6)
+
+            Rectangle {
+              anchors.fill: parent
+              radius: Style.cornerRadius > 0 ? Style.space(5) : 0
+              color: stripMouse.containsMouse ? Util.alpha(root.fg, 0.1) : "transparent"
+              Behavior on color { enabled: root.fastDur > 0; ColorAnimation { duration: root.fastDur } }
+            }
+
+            AgentBadge {
+              id: stripDot
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(4)
+              anchors.verticalCenter: parent.verticalCenter
+              agentState: Model.herdrBarState(stripRow.modelData.status)
+              width: Math.max(8, Math.round(root.iconPx * 0.55))
+            }
+
+            Text {
+              id: stripLabel
+              anchors.left: stripDot.right
+              anchors.leftMargin: Style.space(6)
+              anchors.verticalCenter: parent.verticalCenter
+              width: Math.min(implicitWidth, parent.width * 0.35)
+              text: stripRow.modelData.workspace_label || ("Workspace " + stripRow.modelData.workspace_number)
+              textFormat: Text.PlainText
+              elide: Text.ElideRight
+              color: root.fg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+            }
+
+            Text {
+              anchors.left: stripLabel.right
+              anchors.leftMargin: Style.space(6)
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(4)
+              anchors.verticalCenter: parent.verticalCenter
+              text: stripRow.modelData.title
+              textFormat: Text.PlainText
+              elide: Text.ElideRight
+              color: root.fg
+              opacity: 0.7
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            MouseArea {
+              id: stripMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.focusAgent(stripRow.modelData, preview.workspace ? preview.workspace.windows : [])
+            }
+          }
+        }
+
+        Text {
+          visible: root.sortedAgents.length > previewAgents.maxRows
+          width: parent.width
+          text: "+" + (root.sortedAgents.length - previewAgents.maxRows) + " more in Herdr"
+          color: root.fg
+          opacity: 0.5
+          horizontalAlignment: Text.AlignHCenter
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.caption
         }
       }
 
@@ -1613,6 +1801,259 @@ Panel {
           }
         }
       }
+    }
+  }
+
+  // ------------------------------------------------------------ agents popup
+
+  // The bar closes whichever popup was open when another one opens; this
+  // gives it a close() for the agents list, so opening Spaces settings or
+  // another widget's panel closes the list, and opening the list closes them.
+  QtObject {
+    id: agentsOwner
+    function close() { root.closeAgents() }
+  }
+
+  PopupCard {
+    id: agentsCard
+    anchorItem: agentChip
+    bar: root.bar ? root.bar : previewBar
+    owner: agentsOwner
+    open: root.agentsOpen
+    contentWidth: agentsCard.fittedContentWidth(Style.space(380))
+    contentHeight: agentsCard.fittedContentHeight(agentsColumn.implicitHeight)
+
+    // Popups get no compositor blur, so the card needs its own opaque fill.
+    Rectangle {
+      anchors.fill: parent
+      anchors.margins: -Math.max(0, agentsCard.padding - Style.space(2))
+      radius: Math.max(0, Style.cornerRadius - Style.space(2))
+      color: Qt.rgba(root.bg.r, root.bg.g, root.bg.b, 0.97)
+    }
+
+    // Scrolls once there are more agents than the screen has room for.
+    Flickable {
+      id: agentsFlick
+      anchors.fill: parent
+      contentWidth: width
+      contentHeight: agentsColumn.implicitHeight
+      interactive: contentHeight > height
+      boundsBehavior: Flickable.StopAtBounds
+      clip: true
+
+      Column {
+        id: agentsColumn
+        width: agentsFlick.width
+        spacing: Style.space(4)
+
+        Item {
+          width: parent.width
+          implicitHeight: Math.max(agentsTitle.implicitHeight, agentsCount.implicitHeight) + Style.space(4)
+
+          Text {
+            id: agentsTitle
+            anchors.left: parent.left
+            anchors.leftMargin: Style.space(4)
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Herdr agents"
+            color: root.fg
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            font.bold: true
+          }
+
+          Text {
+            id: agentsCount
+            anchors.right: parent.right
+            anchors.rightMargin: Style.space(4)
+            anchors.verticalCenter: parent.verticalCenter
+            readonly property int count: root.sortedAgents.length
+            text: count + (count === 1 ? " AGENT" : " AGENTS")
+            color: Qt.darker(root.fg, 1.4)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            font.letterSpacing: 1.2
+          }
+        }
+
+        Text {
+          visible: root.sortedAgents.length === 0
+          width: parent.width
+          topPadding: Style.space(6)
+          bottomPadding: Style.space(6)
+          text: "No agents in Herdr"
+          color: root.fg
+          opacity: 0.5
+          horizontalAlignment: Text.AlignHCenter
+          font.family: root.fontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+
+        Repeater {
+          model: root.sortedAgents
+
+          delegate: Item {
+            id: agentRow
+            required property var modelData
+            width: agentsColumn.width
+            implicitHeight: Math.max(agentText.implicitHeight, agentRowBadge.height) + Style.space(10)
+
+            Rectangle {
+              anchors.fill: parent
+              radius: Style.cornerRadius > 0 ? Style.space(5) : 0
+              color: agentMouse.containsMouse ? Util.alpha(root.fg, 0.1) : "transparent"
+              Behavior on color { enabled: root.fastDur > 0; ColorAnimation { duration: root.fastDur } }
+            }
+
+            AgentBadge {
+              id: agentRowBadge
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(6)
+              anchors.verticalCenter: parent.verticalCenter
+              agentState: Model.herdrBarState(agentRow.modelData.status)
+              width: Math.max(10, Math.round(root.iconPx * 0.7))
+            }
+
+            Column {
+              id: agentText
+              anchors.left: agentRowBadge.right
+              anchors.leftMargin: Style.space(8)
+              anchors.right: agentName.left
+              anchors.rightMargin: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(1)
+
+              Row {
+                width: parent.width
+                spacing: Style.space(5)
+
+                Text {
+                  id: agentWorkspace
+                  width: Math.min(implicitWidth, parent.width - agentNumber.implicitWidth - parent.spacing)
+                  text: agentRow.modelData.workspace_label || "Workspace"
+                  textFormat: Text.PlainText
+                  elide: Text.ElideRight
+                  color: root.fg
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: true
+                }
+
+                Text {
+                  id: agentNumber
+                  anchors.baseline: agentWorkspace.baseline
+                  visible: agentRow.modelData.workspace_number > 0
+                  text: String(agentRow.modelData.workspace_number)
+                  color: root.fg
+                  opacity: 0.5
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  font.bold: true
+                }
+              }
+
+              Text {
+                width: parent.width
+                visible: text !== ""
+                text: agentRow.modelData.title
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                color: root.fg
+                opacity: 0.75
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            Text {
+              id: agentName
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(6)
+              anchors.verticalCenter: parent.verticalCenter
+              text: agentRow.modelData.agent
+              textFormat: Text.PlainText
+              color: root.fg
+              opacity: 0.5
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+
+            MouseArea {
+              id: agentMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.focusAgent(agentRow.modelData)
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Agent state as a small round badge: spinner while working, pulsing "!"
+  // when it needs input, check mark when done, a faint dot otherwise. Used on
+  // app icons, in the agents chip and its list, and on the preview card.
+  component AgentBadge: Item {
+    id: badge
+    property string agentState: ""
+    height: width
+
+    Rectangle {
+      anchors.fill: parent
+      anchors.margins: badge.agentState === "" || badge.agentState === "idle" ? parent.width * 0.25 : 0
+      radius: width / 2
+      color: badge.agentState === "done" ? Color.accent
+        : badge.agentState === "waiting" ? (root.bar ? root.bar.urgent : Color.urgent)
+        : badge.agentState === "working" ? root.bg
+        : Util.alpha(root.fg, 0.35)
+    }
+
+    Canvas {
+      id: spinner
+      anchors.fill: parent
+      anchors.margins: 1.5
+      visible: badge.agentState === "working"
+      onPaint: {
+        var ctx = getContext("2d")
+        ctx.reset()
+        ctx.lineWidth = Math.max(1.5, width * 0.18)
+        ctx.lineCap = "round"
+        ctx.strokeStyle = root.fg
+        ctx.beginPath()
+        ctx.arc(width / 2, height / 2, width / 2 - ctx.lineWidth / 2, 0, Math.PI * 1.4)
+        ctx.stroke()
+      }
+      Connections {
+        target: root
+        function onFgChanged() { spinner.requestPaint() }
+      }
+      RotationAnimator on rotation {
+        running: spinner.visible
+        from: 0
+        to: 360
+        duration: 900
+        loops: Animation.Infinite
+      }
+    }
+
+    Text {
+      anchors.centerIn: parent
+      visible: badge.agentState === "done" || badge.agentState === "waiting"
+      text: badge.agentState === "done" ? "\uf00c" : "!"
+      color: root.bg
+      font.family: root.fontFamily
+      font.pixelSize: Math.round(parent.width * 0.62)
+      font.bold: true
+    }
+
+    SequentialAnimation on scale {
+      running: badge.agentState === "waiting"
+      loops: Animation.Infinite
+      alwaysRunToEnd: true
+      NumberAnimation { from: 1; to: 1.3; duration: 520; easing.type: Easing.InOutSine }
+      NumberAnimation { from: 1.3; to: 1; duration: 520; easing.type: Easing.InOutSine }
     }
   }
 

@@ -402,10 +402,12 @@ test("parseHerdrFeed keeps agents and rejects other lines", () => {
     null
   ] })
   assert.deepStrictEqual(M.parseHerdrFeed(line), [{ pane_id: "w1:p1", workspace_id: "w1", workspace_label: "Code",
-    workspace_number: 3, tab_id: "w1:t1", agent: "claude", status: "working", title: "fix bar", focused: true, session: "abc" }])
+    workspace_number: 3, tab_id: "w1:t1", agent: "claude", status: "working", title: "fix bar", focused: true, session: "abc",
+    state_change: 0 }])
   assert.deepStrictEqual(M.parseHerdrFeed(JSON.stringify({ type: "herdr", agents: [{ pane_id: 7, agent: null }] }))[0],
     { pane_id: "7", workspace_id: "", workspace_label: "", workspace_number: 0, tab_id: "", agent: "",
-      status: "", title: "", focused: false, session: "" })
+      status: "", title: "", focused: false, session: "", state_change: 0 })
+  assert.strictEqual(M.parseHerdrFeed(JSON.stringify({ type: "herdr", agents: [{ pane_id: "a", state_change: 36 }] }))[0].state_change, 36)
   assert.strictEqual(M.parseHerdrFeed("not json"), null)
   assert.strictEqual(M.parseHerdrFeed(JSON.stringify({ type: "other", agents: [] })), null)
   assert.strictEqual(M.parseHerdrFeed(JSON.stringify({ type: "herdr" })), null)
@@ -457,6 +459,57 @@ test("herdrTooltipLines lists status, workspace and title", () => {
     { status: "blocked", workspace_label: "", title: "a very long title indeed" },
     { status: "", workspace_label: "Notes", title: "" }
   ], 10), ["working · Code · omarchy-s…", "blocked · a very lo…", "unknown · Notes"])
+})
+
+test("agentChip setting validates", () => {
+  assert.strictEqual(M.resolveSettings({}).agentChip, "auto")
+  assert.strictEqual(M.resolveSettings({ agentChip: "always" }).agentChip, "always")
+  assert.strictEqual(M.resolveSettings({ agentChip: "never" }).agentChip, "never")
+  assert.strictEqual(M.resolveSettings({ agentChip: "sometimes" }).agentChip, "auto")
+})
+
+test("agentChipSummary counts agents and decides visibility per mode", () => {
+  const agents = [
+    { pane_id: "a", status: "working" }, { pane_id: "b", status: "working" },
+    { pane_id: "c", status: "blocked" }, { pane_id: "d", status: "done" },
+    { pane_id: "e", status: "idle" }, { pane_id: "f", status: "unknown" }, null
+  ]
+  assert.deepStrictEqual(M.agentChipSummary(agents, "auto"), { visible: true, working: 2, waiting: 1, done: 1, total: 6 })
+  assert.strictEqual(M.agentChipSummary(agents, "never").visible, false)
+  const quiet = [{ pane_id: "d", status: "done" }, { pane_id: "e", status: "idle" }]
+  assert.deepStrictEqual(M.agentChipSummary(quiet, "auto"), { visible: false, working: 0, waiting: 0, done: 1, total: 2 })
+  assert.strictEqual(M.agentChipSummary(quiet, "always").visible, true)
+  assert.strictEqual(M.agentChipSummary([{ pane_id: "c", status: "blocked" }], "auto").visible, true)
+  assert.strictEqual(M.agentChipSummary([], "always").visible, false)
+  assert.strictEqual(M.agentChipSummary(undefined, "auto").total, 0)
+  // An unknown mode behaves like the default.
+  assert.strictEqual(M.agentChipSummary(agents, "bogus").visible, true)
+})
+
+test("agentChipSegments lists counts most urgent first", () => {
+  assert.deepStrictEqual(M.agentChipSegments({ working: 2, waiting: 1, done: 1, total: 6 }),
+    [{ state: "waiting", count: 1 }, { state: "working", count: 2 }, { state: "done", count: 1 }])
+  assert.deepStrictEqual(M.agentChipSegments({ working: 0, waiting: 0, done: 0, total: 3 }), [{ state: "", count: 3 }])
+  assert.deepStrictEqual(M.agentChipSegments({ working: 0, waiting: 0, done: 0, total: 0 }), [])
+  assert.deepStrictEqual(M.agentChipSegments(null), [])
+})
+
+test("sortAgents puts the newest state change first and keeps listed order otherwise", () => {
+  const listed = [{ pane_id: "a" }, { pane_id: "b" }, { pane_id: "c" }]
+  assert.deepStrictEqual(M.sortAgents(listed).map((a) => a.pane_id), ["a", "b", "c"])
+  const seq = [{ pane_id: "a", state_change: 3 }, { pane_id: "b" }, { pane_id: "c", state_change: 9 },
+    { pane_id: "d", state_change: 3 }]
+  assert.deepStrictEqual(M.sortAgents(seq).map((a) => a.pane_id), ["c", "a", "d", "b"])
+  assert.deepStrictEqual(seq.map((a) => a.pane_id), ["a", "b", "c", "d"], "input is left alone")
+  assert.deepStrictEqual(M.sortAgents(undefined), [])
+})
+
+test("herdrHostAddress picks the first window hosting Herdr", () => {
+  const windows = [{ address: "a1", pid: 5 }, { address: "b2", pid: 20 }, { address: "c3", pid: 10 }]
+  assert.strictEqual(M.herdrHostAddress(windows, [10, 20]), "b2")
+  assert.strictEqual(M.herdrHostAddress(windows, [30]), "")
+  assert.strictEqual(M.herdrHostAddress([{ address: "z", pid: 0 }], [0]), "")
+  assert.strictEqual(M.herdrHostAddress(undefined, [10]), "")
 })
 
 test("localPath decodes file URLs", () => {

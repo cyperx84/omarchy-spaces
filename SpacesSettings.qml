@@ -136,6 +136,17 @@ Item {
           ToggleSetting { visible: root.cfg.showIcons; label: "Agent status"; description: "Badges on terminals running coding agents"; key: "agentStatus" }
           ToggleSetting { visible: root.cfg.showIcons && root.cfg.agentStatus; label: "Herdr agents"; description: "Badge terminals running Herdr with its agent status"; key: "herdrAgents" }
 
+          ChoiceSetting {
+            visible: root.cfg.agentStatus && root.cfg.herdrAgents
+            title: "AGENTS CHIP"
+            key: "agentChip"
+            options: [
+              { value: "auto", label: "Auto" },
+              { value: "always", label: "Always" },
+              { value: "never", label: "Never" }
+            ]
+          }
+
         ToggleSetting { label: "Highlight urgent windows"; description: "Pulse workspaces asking for attention"; key: "urgentHighlight" }
         ToggleSetting { label: "Tooltips"; description: "Window titles on hover"; key: "tooltips" }
       }

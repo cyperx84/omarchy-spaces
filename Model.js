@@ -34,7 +34,8 @@ var DEFAULTS = {
   previewSize: "medium",      // "small" | "medium" | "large"
   previewLive: true,          // keep previews streaming; false = one frame
   agentStatus: true,          // badges for coding agents running in terminals
-  herdrAgents: true           // agent status from Herdr for terminals hosting it
+  herdrAgents: true,          // agent status from Herdr for terminals hosting it
+  agentChip: "auto"           // Herdr agents chip: "auto" | "always" | "never"
 }
 
 var SHOW_APPS = ["all", "active", "hover", "hoverOnly"]
@@ -46,6 +47,7 @@ var PREVIEW_SIZES = ["small", "medium", "large"]
 var ACTIVE_STYLES = ["subtle", "solid", "accent"]
 var LABEL_STYLES = ["number", "key", "both", "glyph", "none"]
 var SPEEDS = ["slow", "normal", "fast"]
+var AGENT_CHIPS = ["auto", "always", "never"]
 
 function clampInt(value, min, max, fallback) {
   var n = Math.round(Number(value))
@@ -95,7 +97,8 @@ function resolveSettings(raw) {
     previewSize: oneOf(s.previewSize, PREVIEW_SIZES, d.previewSize),
     previewLive: bool(s.previewLive, d.previewLive),
     agentStatus: bool(s.agentStatus, d.agentStatus),
-    herdrAgents: bool(s.herdrAgents, d.herdrAgents)
+    herdrAgents: bool(s.herdrAgents, d.herdrAgents),
+    agentChip: oneOf(s.agentChip, AGENT_CHIPS, d.agentChip)
   }
 }
 
@@ -504,7 +507,8 @@ function parseHerdrFeed(line) {
       status: String(a.status || ""),
       title: String(a.title || ""),
       focused: a.focused === true,
-      session: String(a.session || "")
+      session: String(a.session || ""),
+      state_change: Number(a.state_change) || 0
     })
   }
   return out
@@ -577,6 +581,58 @@ function herdrTooltipLines(agents, maxTitle) {
     lines.push(parts.join(" · "))
   }
   return lines
+}
+
+// ---- Agents chip
+
+// What the agents chip after the workspace pills shows. `mode` "auto" shows
+// it while an agent is working or waiting, "always" whenever Herdr lists an
+// agent at all, "never" not at all. Idle agents only count towards `total`.
+function agentChipSummary(agents, mode) {
+  var out = { visible: false, working: 0, waiting: 0, done: 0, total: 0 }
+  var list = Array.isArray(agents) ? agents : []
+  for (var i = 0; i < list.length; i++) {
+    if (!list[i]) continue
+    var state = herdrBarState(list[i].status)
+    if (state) out[state]++
+    out.total++
+  }
+  if (mode === "always") out.visible = out.total > 0
+  else if (mode !== "never") out.visible = out.working + out.waiting > 0
+  return out
+}
+
+// The chip's counts, most urgent first: [{ state, count }]. When every agent
+// is idle the chip still reads as one plain total.
+function agentChipSegments(summary) {
+  var out = []
+  var order = ["waiting", "working", "done"]
+  for (var i = 0; i < order.length; i++)
+    if (summary && summary[order[i]] > 0) out.push({ state: order[i], count: summary[order[i]] })
+  if (!out.length && summary && summary.total > 0) out.push({ state: "", count: summary.total })
+  return out
+}
+
+// Newest first by Herdr's state_change sequence. Agents without one keep
+// their listed order, after those with one. Returns a new array.
+function sortAgents(agents) {
+  var indexed = (Array.isArray(agents) ? agents : []).map(function(a, i) { return { a: a, i: i } })
+  indexed.sort(function(l, r) {
+    var ls = Number(l.a && l.a.state_change) || 0
+    var rs = Number(r.a && r.a.state_change) || 0
+    return ls !== rs ? rs - ls : l.i - r.i
+  })
+  return indexed.map(function(x) { return x.a })
+}
+
+// The window to raise when jumping to an agent: the first of `windows`
+// ([{ address, pid }], in order of preference) that hosts a Herdr client.
+function herdrHostAddress(windows, hostPids) {
+  for (var i = 0; i < (windows || []).length; i++) {
+    var w = windows[i]
+    if (w && w.pid && (hostPids || []).indexOf(w.pid) !== -1) return w.address
+  }
+  return ""
 }
 
 // ---- Key binds
@@ -735,6 +791,8 @@ if (typeof module !== "undefined") {
     herdrBarState: herdrBarState, parseHerdrFeed: parseHerdrFeed, herdrSummary: herdrSummary,
     herdrAcks: herdrAcks, parseHerdrClients: parseHerdrClients, herdrStatesByPid: herdrStatesByPid,
     herdrTooltipLines: herdrTooltipLines, localPath: localPath,
+    agentChipSummary: agentChipSummary, agentChipSegments: agentChipSegments, sortAgents: sortAgents,
+    herdrHostAddress: herdrHostAddress,
     previewWidth: previewWidth, previewDimensions: previewDimensions, monitorArea: monitorArea, previewLayout: previewLayout, durationFor: durationFor,
     workspaceIds: workspaceIds, workspaceLabel: workspaceLabel, workspaceCaption: workspaceCaption, appKey: appKey,
     modNames: modNames, keyDisplay: keyDisplay, workspaceKeyBinds: workspaceKeyBinds, keyHintText: keyHintText,

@@ -252,6 +252,17 @@
         "type": "bool",
         "label": "Herdr agents",
         "default": true
+      },
+      {
+        "key": "agentChip",
+        "type": "enum",
+        "label": "Agents chip",
+        "options": [
+          "auto",
+          "always",
+          "never"
+        ],
+        "default": "auto"
       }
     ]
   }
